@@ -1,2 +1,2 @@
-# monarch
+# Ivory
 Data curation tool
