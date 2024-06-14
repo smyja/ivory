@@ -1,0 +1,46 @@
+.feature {
+    position: relative;
+    padding-top: var(--mantine-spacing-xl);
+    padding-left: var(--mantine-spacing-xl);
+  }
+  
+  .overlay {
+    position: absolute;
+    height: rem(100px);
+    width: rem(160px);
+    top: 0;
+    left: 0;
+    background-color: var(--mantine-color-blue-light);
+    z-index: 1;
+  }
+  
+  .content {
+    position: relative;
+    z-index: 2;
+  }
+  
+  .icon {
+    color: var(--mantine-color-blue-filled);
+  }
+  
+  .title {
+    color: light-dark(var(--mantine-color-black), var(--mantine-color-white));
+  }
+  .boxPosition {
+    margin: 0 auto;
+    width: 219px;
+    height: 209px;
+    background: #FFFFFF;
+    border: 0.6px solid #fffbfb;
+  }
+  
+  @media (min-width: 800px) {
+    .boxP {
+      margin-left: 79px;
+      width: 219px;
+      height: 180px;
+      background: white;
+      border: 0.6px solid #7a6d6d;
+    }
+  }
+  

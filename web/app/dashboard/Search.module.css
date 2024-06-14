@@ -1,0 +1,22 @@
+.card{
+    width:600px
+}
+.cardanswer{
+    margin-top: 50px;
+    width:800px
+}
+
+.searchwidth{
+    width: 900px;
+}
+.cardskeleton{
+    width:1000px
+}
+.button{
+    width: 200px;
+    background-color: black;
+    color: white;
+    &:hover {
+        background-color: orange;
+      }
+}
