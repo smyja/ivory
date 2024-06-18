@@ -12,7 +12,7 @@ export default function DashboardLayout({
   const [opened, { toggle }] = useDisclosure();
 
   return (
-    <RequireAuth>
+
       <AppShell
         header={{ height: 60 }}
         navbar={{ width: 300, breakpoint: 'sm', collapsed: { mobile: !opened } }}
@@ -35,6 +35,6 @@ export default function DashboardLayout({
         </AppShell.Main>
       
       </AppShell>
-      </RequireAuth>
+  
   )
 }

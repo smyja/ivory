@@ -13,7 +13,7 @@ export default function Loading() {
                     "fontSize": 80
                   }
                 }}
-              >Infrarail</Title>
+              >Ivory</Title>
 
             </Center>
             </Center>
