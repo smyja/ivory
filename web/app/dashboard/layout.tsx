@@ -1,7 +1,6 @@
 'use client'
 import { useDisclosure } from '@mantine/hooks';
 import { AppShell, Burger, Group, Skeleton } from '@mantine/core';
-import { RouteChangeProvider } from 'nextjs13-router-events';
 import { NavbarSimpleColored } from '@/components/Navbar/NavbarSimpleColored';
 import { RequireAuth } from '@/components/utils';
 
