@@ -13,3 +13,4 @@ response = client.embeddings.create(
   input="Our solar system orbits the Milky Way galaxy at about 515,000 mph",
 )
 print(response.data[0].embedding)
+

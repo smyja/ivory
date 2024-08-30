@@ -3,7 +3,7 @@ from communex.key import generate_keypair
 from keylimiter import TokenBucketLimiter
 
 
-class Miner(Module):
+class Ivory(Module):
     """
     A module class for mining and generating responses to prompts.
 
