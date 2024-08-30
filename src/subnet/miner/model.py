@@ -37,7 +37,7 @@ if __name__ == "__main__":
     import uvicorn
 
     key = generate_keypair()
-    miner = Miner()
+    miner = Ivory()
     refill_rate = 1 / 400
     # Implementing custom limit
     bucket = TokenBucketLimiter(2, refill_rate)
