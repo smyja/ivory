@@ -1,81 +1,55 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from typing import List
-from sklearn.feature_extraction.text import TfidfVectorizer
-import hdbscan
-import numpy as np
+import os
+from fastapi import FastAPI
+from contextlib import asynccontextmanager
+from fastapi.openapi.utils import get_openapi
 import logging
 from dotenv import load_dotenv
-import httpx
-import json
+from routes.api import router
 
-# router = APIRouter()
+# Load environment variables
 load_dotenv()
+
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI()
+# Check for TOGETHER_API_KEY
+if not os.environ.get('TOGETHER_API_KEY'):
+    logger.error("TOGETHER_API_KEY is not set in the environment variables")
+    raise EnvironmentError("TOGETHER_API_KEY is not set. Please set this environment variable before running the application.")
 
-class Question(BaseModel):
-    question: str
-    answer: str
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("FastAPI app is starting up")
+    logger.info("Registered routes during startup:")
+    for route in app.routes:
+        logger.info(f"Path: {route.path}, Methods: {route.methods}")
+    yield
+    logger.info("FastAPI app is shutting down")
 
-class QuestionList(BaseModel):
-    questions: List[Question]
+app = FastAPI(lifespan=lifespan)
 
-@app.post("/cluster")
-async def cluster_questions(question_list: QuestionList):
-    try:
-        # Extract questions
-        questions = [q.question for q in question_list.questions]
-        
-        logger.info(f"Received {len(questions)} questions for clustering")
+app.include_router(router)
 
-        # Vectorize the questions
-        vectorizer = TfidfVectorizer(stop_words='english')
-        X = vectorizer.fit_transform(questions)
-        
-        logger.info(f"Vectorized questions. Shape: {X.shape}")
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
 
-        # Perform clustering with HDBSCAN
-        clusterer = hdbscan.HDBSCAN(min_cluster_size=2, min_samples=1, cluster_selection_epsilon=0.5)
-        cluster_labels = clusterer.fit_predict(X.toarray())
+    openapi_schema = get_openapi(
+        title="Question Clustering API",
+        version="1.0.0",
+        description="API for clustering questions and generating titles",
+        routes=app.routes,
+    )
+    
+    logger.info("Custom OpenAPI schema generation:")
+    for route in app.routes:
+        logger.info(f"Path: {route.path}, Methods: {route.methods}, Name: {route.name}")
         
-        logger.info(f"Clustering completed. Cluster labels: {cluster_labels}")
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
 
-        # Generate cluster titles
-        feature_names = vectorizer.get_feature_names_out()
-        cluster_titles = {}
-        for label in set(cluster_labels):
-            if label != -1:  # -1 is the noise label in HDBSCAN
-                cluster_docs = np.array(questions)[cluster_labels == label]
-                cluster_vector = vectorizer.transform(cluster_docs).sum(axis=0)
-                top_indices = cluster_vector.argsort()[0, -5:].tolist()  # Convert to list and flatten
-                cluster_words = [str(feature_names[idx]) for idx in top_indices]  # Ensure strings
-                cluster_titles[label] = " ".join(cluster_words[::-1])
-        
-        # Add a title for noise points
-        cluster_titles[-1] = "Unclustered"
-        
-        logger.info(f"Generated cluster titles: {cluster_titles}")
-
-        # Prepare results
-        results = []
-        for q, label in zip(question_list.questions, cluster_labels):
-            results.append({
-                "question": q.question,
-                "answer": q.answer,
-                "cluster": int(label),
-                "cluster_title": cluster_titles[label]
-            })
-        
-        logger.info("Successfully prepared results")
-        
-        return results
-    except Exception as e:
-        logger.exception(f"An error occurred: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+app.openapi = custom_openapi
 
 if __name__ == "__main__":
     import uvicorn
