@@ -1,9 +1,8 @@
 from fastapi import APIRouter, HTTPException
+from typing import List
 from models import QuestionList, ClusteredQuestion
 from utils.clustering import process_questions
-from typing import List
 import logging
-
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

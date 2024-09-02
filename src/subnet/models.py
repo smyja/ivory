@@ -11,3 +11,4 @@ class QuestionList(BaseModel):
 class ClusteredQuestion(Question):
     cluster: int
     cluster_title: str
+    category: str  # Make sure this field is included
