@@ -31,7 +31,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 app.include_router(api_router)
-app.include_router(dataset_router, prefix="/datasets", tags=["datasets"])
+app.include_router(dataset_router, tags=["datasets"])
 
 def custom_openapi():
     if app.openapi_schema:

@@ -42,7 +42,7 @@ class DatasetMetadata(Base):
     name = Column(String, index=True)
     subset = Column(String, nullable=True)
     split = Column(String, nullable=True)
-    download_date = Column(types.TIMESTAMP, server_default=func.now())  # types.TIMESTAMP for DuckDB compatibility
+    download_date = Column(types.TIMESTAMP, server_default=func.now()) 
     is_clustered = Column(Boolean, default=False)
     status = Column(SQLAlchemyEnum(DownloadStatus), default=DownloadStatus.PENDING)
 
