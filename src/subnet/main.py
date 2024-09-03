@@ -4,7 +4,8 @@ from contextlib import asynccontextmanager
 from fastapi.openapi.utils import get_openapi
 import logging
 from dotenv import load_dotenv
-from routes.api import router
+from routes.api import router as api_router
+from routes.datasets import router as dataset_router
 
 # Load environment variables
 load_dotenv()
@@ -29,16 +30,17 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-app.include_router(router)
+app.include_router(api_router)
+app.include_router(dataset_router, prefix="/datasets", tags=["datasets"])
 
 def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
 
     openapi_schema = get_openapi(
-        title="Question Clustering API",
+        title="Question Clustering and Dataset API",
         version="1.0.0",
-        description="API for clustering questions and generating titles",
+        description="API for clustering questions, generating titles, and managing datasets",
         routes=app.routes,
     )
     
