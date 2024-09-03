@@ -3,13 +3,17 @@ from sqlalchemy.orm import Session
 from typing import List, Dict, Optional
 import logging
 import os
+import duckdb
 import pandas as pd
-import pyarrow.parquet as pq
 from models import DatasetRequest, DatasetMetadataResponse, DatasetMetadata
 from utils.database import get_db, download_and_save_dataset, get_active_downloads, verify_and_update_dataset_status
 
 router = APIRouter(prefix="/datasets")
 logger = logging.getLogger(__name__)
+
+# Helper function to get DuckDB connection
+def get_duckdb_connection():
+    return duckdb.connect('datasets.db')
 
 @router.post("")
 async def download_dataset(request: DatasetRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
@@ -45,6 +49,11 @@ async def get_dataset_info(dataset_id: int, db: Session = Depends(get_db)):
     if not os.path.exists(dataset_path):
         raise HTTPException(status_code=404, detail=f"Dataset directory not found: {dataset_path}")
 
+    # Load data into DuckDB
+    con = get_duckdb_connection()
+    con.execute(f"CREATE TABLE IF NOT EXISTS dataset_{dataset_id} AS SELECT * FROM parquet_scan('{dataset_path}/data.parquet')")
+    
+    # Get splits info
     splits = [split for split in os.listdir(dataset_path) if os.path.isdir(os.path.join(dataset_path, split))]
     
     if not splits:
@@ -61,6 +70,7 @@ async def get_dataset_info(dataset_id: int, db: Session = Depends(get_db)):
                 "sample_rows": df.head(5).to_dict(orient="records")
             }
 
+    con.close()
     return {
         "id": dataset_metadata.id,
         "name": dataset_metadata.name,
@@ -98,20 +108,24 @@ async def get_dataset_records(
 
     try:
         df = pd.read_parquet(data_file)
+        total_records = len(df)  # Get the total number of records in the dataset
         start = (page - 1) * page_size
         end = start + page_size
 
+        # Ensure the end index does not exceed the total number of records
+        if end > total_records:
+            end = total_records
+
         return {
             "split": split,
-            "total_records": len(df),
+            "total_records": total_records,  # Correct total record count
             "page": page,
             "page_size": page_size,
             "records": df.iloc[start:end].to_dict(orient="records")
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error reading dataset: {str(e)}")
-    
-    
+
 @router.get("/{dataset_id}/query")
 async def query_dataset(
     dataset_id: int,
@@ -139,12 +153,16 @@ async def query_dataset(
         raise HTTPException(status_code=404, detail=f"Dataset file not found: {data_file}")
 
     try:
-        df = pd.read_parquet(data_file)
-        result = df.query(query)
+        con = get_duckdb_connection()
+        con.execute(f"CREATE TABLE IF NOT EXISTS dataset_{dataset_id} AS SELECT * FROM parquet_scan('{data_file}')")
+
+        result_df = con.execute(query).fetchdf()
+        con.close()
+
         return {
             "split": split,
-            "total_records": len(result),
-            "records": result.to_dict(orient="records")
+            "total_records": len(result_df),
+            "records": result_df.to_dict(orient="records")
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error querying dataset: {str(e)}")
