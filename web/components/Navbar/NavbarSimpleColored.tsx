@@ -12,6 +12,7 @@ import {
   IconChevronRight,
   IconSwitchHorizontal,
   IconLogout,
+  IconDatabase
 } from '@tabler/icons-react';
 import Link from 'next/link';
 import classes from './NavbarSimpleColored.module.css';
@@ -23,7 +24,7 @@ const data = [
   { link: '/dashboard/documents', label: 'Documents', icon: IconFiles },
   {
     label: 'Datasets',
-    icon: IconFiles,
+    icon: IconDatabase,
     links: [
       { link: '/dashboard/datasets', label: 'Overview' },
       { link: '/dashboard/datasets/new', label: 'New Dataset' },

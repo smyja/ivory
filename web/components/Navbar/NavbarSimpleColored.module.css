@@ -120,6 +120,7 @@
 .link.active {
   background-color: var(--mantine-color-dark-light);
   color: var(--mantine-color-dark-light-color);
+  margin-top: 10px;
 }
 
 .link.active .linkIcon {
