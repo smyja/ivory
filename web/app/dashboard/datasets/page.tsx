@@ -58,7 +58,7 @@ const Datasource = () => {
                 
                 <Box maw={600} ml={200}><Text ta="center" fz={18} fw={300} lineClamp={4}>Create a dataset from numerous data sources Do low-resource languages have lower quality?
 Low-resource datasets tend to have lower human Low-resource datasets tend to have lower human </Text></Box>
-                <Center maw={1000} mt={20}><Button onClick={open}>Add a dataset</Button></Center>
+                <Center maw={1000} mt={20}><Button onClick={open} color='tomato'>Add a dataset</Button></Center>
            
       <Modal
         opened={opened}

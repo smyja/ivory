@@ -18,10 +18,10 @@ export default function DashboardLayout({
         navbar={{ width: 300, breakpoint: 'sm', collapsed: { mobile: !opened } }}
         padding="md"
         layout='alt'
-        style={{backgroundColor: "#f5f5f5"}}
+        style={{backgroundColor: "white"}}
       >
         <AppShell.Header
-         style={{backgroundColor: "#f5f5f5"}}
+         style={{backgroundColor: "white"}}
         >
           <Group h="100%" px="md">
             <Burger opened={opened} onClick={toggle} hiddenFrom="sm" size="sm" />
@@ -29,7 +29,7 @@ export default function DashboardLayout({
           </Group>
         </AppShell.Header>
         <AppShell.Navbar p="sm"
-        style={{backgroundColor: "#f5f5f5"}}
+        style={{backgroundColor: "white"}}
         >
           <NavbarSimpleColored />
           
