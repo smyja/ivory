@@ -6,3 +6,7 @@ font-family: 'satoshi', sans-serif;
     font-family: "satoshi", sans-serif;
     font-weight: 700;
   }
+
+.mantine-AppShell-main{
+    background-color: rebeccapurple !important;
+  }

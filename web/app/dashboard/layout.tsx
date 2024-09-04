@@ -18,14 +18,19 @@ export default function DashboardLayout({
         navbar={{ width: 300, breakpoint: 'sm', collapsed: { mobile: !opened } }}
         padding="md"
         layout='alt'
+        style={{backgroundColor: "ivory"}}
       >
-        <AppShell.Header>
+        <AppShell.Header
+         style={{backgroundColor: "ivory"}}
+        >
           <Group h="100%" px="md">
             <Burger opened={opened} onClick={toggle} hiddenFrom="sm" size="sm" />
             Railsearch
           </Group>
         </AppShell.Header>
-        <AppShell.Navbar p="sm">
+        <AppShell.Navbar p="sm"
+        style={{backgroundColor: "ivory"}}
+        >
           <NavbarSimpleColored />
           
         </AppShell.Navbar>

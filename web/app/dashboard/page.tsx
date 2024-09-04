@@ -38,7 +38,7 @@ import {
   IconWorldWww,
   IconExternalLink
 } from "@tabler/icons-react";
-import classes from "./Search.module.css";
+import classes from "./global.module.css";
 import Link from "next/link";
 import NextImage from "next/image";
 import { useRouter } from "next/navigation";

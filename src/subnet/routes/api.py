@@ -1,9 +1,7 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from typing import List
-from models import QuestionList, ClusteredQuestion, DatasetRequest
+from models import QuestionList, ClusteredQuestion
 from utils.clustering import process_questions
-from datasets import load_dataset
-import os
 import logging
 
 router = APIRouter()
