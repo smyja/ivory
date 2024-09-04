@@ -1,9 +1,20 @@
-"use client";
-import React from "react";
-import { Text, SimpleGrid, Container, Button,Modal,TextInput,Group,rem,Title } from "@mantine/core";
-import Link from "next/link";
-import classes from "./FeaturesAsymmetrical.module.css";
-import Image from 'next/image'
+'use client';
+import React from 'react';
+import {
+  Text,
+  SimpleGrid,
+  Box,
+  Button,
+  Modal,
+  TextInput,
+  Group,
+  Center,
+  rem,
+  Title,
+} from '@mantine/core';
+import Link from 'next/link';
+import classes from './FeaturesAsymmetrical.module.css';
+import Image from 'next/image';
 import {
   IconBrandNotion,
   IconBrandGoogleDrive,
@@ -13,46 +24,58 @@ import {
   IconCsv,
   IconPdf,
   IconDatabase,
-} from "@tabler/icons-react";
+} from '@tabler/icons-react';
 import { useDisclosure } from '@mantine/hooks';
 import { modals } from '@mantine/modals';
-import { redirect } from "next/dist/server/api-utils";
-
+import { redirect } from 'next/dist/server/api-utils';
+import AuthenticationTitle from './new/import';
 
 const Datasource = () => {
   const [opened, { open, close }] = useDisclosure(false);
 
   return (
-      <>
-      <Text>You have not created any data source.</Text>
-      <Modal opened={opened} onClose={close} withCloseButton={false} centered size="55%" radius={20} padding={24}>
-                <Title order={3} mb={24}>Import your website</Title>
-                <Text mt="5">
-                  We’ll crawl your site and pull in as much of your content as possible.
-                </Text>
-                <Group mt={10}>
+    <>
+      <Box> 
+          <Center maw={1000} pt={180} >
+           <IconDatabase 
+             style={{ width: rem(80), height: rem(80), color:"tomato" }}
+           /></Center>
+           </Box>
+        <Box> 
+          <Center maw={1000} mt={1} >
+          
+              <Title
+                styles={{
+                  root:
+                  {
+                    "fontSize": 80
+                  }
+                }}
+                fw={300}
+              >Ivory</Title> 
+              </Center>
+          </Box>
                 
-                  <Button >
-                    Add
-                  </Button>
-                </Group>
-                <Group mt={10}>
+                <Box maw={600} ml={200}><Text ta="center" fz={18} fw={300} lineClamp={4}>Create a dataset from numerous data sources Do low-resource languages have lower quality?
+Low-resource datasets tend to have lower human Low-resource datasets tend to have lower human </Text></Box>
+                <Center maw={1000} mt={20}><Button onClick={open}>Add a dataset</Button></Center>
+           
+      <Modal
+        opened={opened}
+        onClose={close}
+        withCloseButton={false}
+        centered
+        size="45%"
+        radius={20}
+        padding={24}
+      >
+        <AuthenticationTitle onClose={close} />
+      </Modal>
 
-                  <TextInput
-                    label="Sitemap"
-                    withAsterisk
+        
+          
 
-                    placeholder="https://example.com/sitemap.xml"
-                  />
-                  <Button variant="filled" mt="30" color="black" size="xs" loading>Get links</Button>
-                </Group>
-                <Text mt="20">Found 755 links</Text>
-            
-                <Button mt="10" ml={590} radius={6}>Save</Button>
-              </Modal>
-      <Button onClick={open}>Add a dataset</Button>
-      
-      </>
+    </>
   );
 };
 

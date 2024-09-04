@@ -15,8 +15,10 @@
     "isolatedModules": true,
     "jsx": "preserve",
     "incremental": true,
+    "baseUrl": ".",
     "paths": {
-      "@/*": ["./*"]
+      "@/*": ["./*"],
+      "@styles/*": ["app/styles/*"]
     },
     "plugins": [{ "name": "next" }]
   },

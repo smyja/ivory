@@ -8,7 +8,7 @@ import { ModalsProvider } from '@mantine/modals';
 import { theme } from "../theme";
 import Provider from '../redux/provider';
 import localFont from 'next/font/local'
-import classes from "./global.module.css"
+import classes from "@styles/global.module.css"
 import { Notifications } from '@mantine/notifications';
 import '@mantine/notifications/styles.css';
 import '@mantine/dropzone/styles.css';
