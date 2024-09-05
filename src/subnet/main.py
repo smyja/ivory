@@ -1,5 +1,6 @@
 import os
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from fastapi.openapi.utils import get_openapi
 import logging
@@ -29,6 +30,21 @@ async def lifespan(app: FastAPI):
     logger.info("FastAPI app is shutting down")
 
 app = FastAPI(lifespan=lifespan)
+
+# Configure CORS
+origins = [
+    "http://localhost:3000",  # React default port
+    "http://localhost:5000",  # Another common frontend port
+    # Add any other origins (frontend URLs) you want to allow
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(api_router)
 app.include_router(dataset_router, tags=["datasets"])
