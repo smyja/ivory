@@ -33,9 +33,8 @@ app = FastAPI(lifespan=lifespan)
 
 # Configure CORS
 origins = [
-    "http://localhost:3000",  # React default port
-    "http://localhost:5000",  # Another common frontend port
-    # Add any other origins (frontend URLs) you want to allow
+    "http://localhost:3000"
+
 ]
 
 app.add_middleware(
