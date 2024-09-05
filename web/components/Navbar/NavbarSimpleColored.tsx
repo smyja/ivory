@@ -28,6 +28,7 @@ const data = [
     links: [
       { link: '/dashboard/datasets', label: 'Overview' },
       { link: '/dashboard/datasets/new', label: 'New Dataset' },
+      { link: '/dashboard/datasets/cluster', label: 'Cluster' },
     ],
   },
   { link: '/dashboard/insight', label: 'Insight', icon: IconFingerprint },

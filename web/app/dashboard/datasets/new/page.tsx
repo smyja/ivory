@@ -1,49 +1,22 @@
 'use client'
 import React, { useState, useEffect } from 'react';
-import { Container, Grid, Card, Text, rem, Divider, Button, Group, Switch, useMantineTheme, Badge, ActionIcon, Highlight } from '@mantine/core';
+import { Container, Grid, Card, Text, rem, Divider, Button, Group, Switch, useMantineTheme, Badge, ActionIcon, Highlight, CopyButton, Tooltip } from '@mantine/core';
 import ReactMarkdown from 'react-markdown';
-import { IconCopy, IconCheck, IconX, IconChevronLeft, IconChevronRight, IconSearch } from '@tabler/icons-react';
+import { IconCopy, IconCheck, IconX, IconChevronLeft, IconChevronRight } from '@tabler/icons-react';
 import { AccordionStats } from '../accordion';
 import { SortButton } from './sort';
 import SearchComponent from './search';
 
 interface Record {
-    [key: string]: string;
-  }
-  
+  [key: string]: string;
+}
+
 interface ApiResponse {
-split: string;
-total_records: number;
-page: number;
-page_size: number;
-records: Record[];
-}
-
-interface CopyButtonProps {
-  text: string;
-}
-
-const CopyButton: React.FC<CopyButtonProps> = ({ text }) => {
-  const [copied, setCopied] = useState<boolean>(false);
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  };
-
-  return (
-    <Button 
-      onClick={handleCopy} 
-      size="sm" 
-      variant="subtle" 
-      color={copied ? 'teal' : 'gray'}
-      px={0}
-    >
-      {copied ? <IconCheck size={16} /> : <IconCopy size={16} />}
-    </Button>
-  );
+  split: string;
+  total_records: number;
+  page: number;
+  page_size: number;
+  records: Record[];
 }
 
 interface CustomPaginationProps {
@@ -77,40 +50,40 @@ const CustomPagination: React.FC<CustomPaginationProps> = ({ currentPage, totalP
 }
 
 const LeadGrid: React.FC = () => {
-    const theme = useMantineTheme();
-    const [renderMarkdown, setRenderMarkdown] = useState<boolean>(false);
-    const [currentPage, setCurrentPage] = useState<number>(1);
-    const [totalRecords, setTotalRecords] = useState<number>(0);
-    const [allRecords, setAllRecords] = useState<Record[]>([]);
-    const [filteredRecords, setFilteredRecords] = useState<Record[]>([]);
-    const [loading, setLoading] = useState<boolean>(true);
-    const [error, setError] = useState<string | null>(null);
-    const [searchTerms, setSearchTerms] = useState<string[]>([]);
-  
-    useEffect(() => {
-      fetchData();
-    }, []);
-  
-    useEffect(() => {
-      filterRecords();
-    }, [searchTerms, allRecords]);
-  
-    const fetchData = async () => {
-        setLoading(true);
-        try {
-          let allFetchedRecords: Record[] = [];
+  const theme = useMantineTheme();
+  const [renderMarkdown, setRenderMarkdown] = useState<boolean>(false);
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [totalRecords, setTotalRecords] = useState<number>(0);
+  const [allRecords, setAllRecords] = useState<Record[]>([]);
+  const [filteredRecords, setFilteredRecords] = useState<Record[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+  const [searchTerms, setSearchTerms] = useState<string[]>([]);
+
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  useEffect(() => {
+    filterRecords();
+  }, [searchTerms, allRecords]);
+
+  const fetchData = async () => {
+    setLoading(true);
+    try {
+      let allFetchedRecords: Record[] = [];
           let page = 1;
           let totalRecords = 0;
           const pageSize = 50; // Assuming the backend is returning 50 records per page
       
           while (true) {
             const response = await fetch(`http://0.0.0.0:8000/datasets/7/records?page=${page}&page_size=${pageSize}`);
-            if (!response.ok) {
-              throw new Error('Network response was not ok');
-            }
-      
-            const data: ApiResponse = await response.json();
-            totalRecords = data.total_records;
+      if (!response.ok) {
+        throw new Error('Network response was not ok');
+      }
+
+      const data: ApiResponse = await response.json();
+      totalRecords = data.total_records;
       
             // Combine records from each page
             allFetchedRecords = [...allFetchedRecords, ...data.records];
@@ -124,111 +97,110 @@ const LeadGrid: React.FC = () => {
           }
       
           setAllRecords(allFetchedRecords);
-          setTotalRecords(totalRecords);
-          setError(null);
-        } catch (error) {
-          setError('Failed to fetch data');
-          console.error('Error fetching data:', error);
-        } finally {
-          setLoading(false);
-        }
-      };
-    const filterRecords = () => {
-        if (searchTerms.length === 0) {
-          setFilteredRecords(allRecords);
-        } else {
-          const filtered = allRecords.filter(record => 
-            Object.values(record).some(value => 
-              searchTerms.some(term => 
-                value.toLowerCase().includes(term.toLowerCase())
-              )
-            )
-          );
-          setFilteredRecords(filtered);
-        }
-        setCurrentPage(1);
-      };
-    
-      const handleSearch = (term: string) => {
-        const terms = term.split(' ').filter(t => t.trim() !== '');
-        setSearchTerms(terms);
-      };
-      const currentRecord = filteredRecords[currentPage - 1] || null;
-    
-      const totalPages = filteredRecords.length;
-    
- 
-  
-    const preStyles: React.CSSProperties = {
-      fontFamily: 'inherit',
-      fontWeight: 300,
-      whiteSpace: 'pre-wrap',
-      wordBreak: 'break-word',
-      width: '100%',
-      margin: 0,
-      padding: theme.spacing.sm,
-      backgroundColor: 'lavenderblush',
-      borderRadius: theme.radius.md,
-      border: '1px solid black',
-    };
-    const customRenderers = {
-        p: ({ node, children }: any) => {
-          // Ensure children is always a string for the `Highlight` component
-          const content = Array.isArray(children) ? children.join('') : children;
-          return <Highlight highlight={searchTerms}>{content}</Highlight>;
-        },
-      };
-    return (
-        <>   
-          <Group mt={10} justify="space-between">  
-            <SearchComponent onSearch={handleSearch} />
-            <Group justify="flex-end" gap="xs">
-              <ActionIcon color='gray'>
-                <IconChevronLeft size="1rem" />
-              </ActionIcon>
-              <Button variant="default">Filter</Button>
-              <SortButton/>
-            </Group>
-          </Group>
-          <Container my="md" fluid>
-            <Grid gutter="md">
-              <Grid.Col span={{ base: 12, md: 8 }}>
-                <Card shadow="sm" radius="md" withBorder pb={50}>
-                  <Card.Section withBorder inheritPadding py="xs" style={{backgroundColor:"lavenderblush"}}>
-                    
-                  <Group justify="space-between" align="center">
-                    <Text fw={300} size="sm">Dataset Record</Text>
-                    <CustomPagination 
-                      currentPage={currentPage}
-                      totalPages={totalPages}
-                      onPageChange={setCurrentPage}
-                    />
-                    <Switch
-                      checked={renderMarkdown}
-                      onChange={(event) => setRenderMarkdown(event.currentTarget.checked)}
-                      color="teal"
-                      size="sm"
-                      label="Markdown"
-                      thumbIcon={
-                        renderMarkdown ? (
-                          <IconCheck
-                            style={{ width: rem(12), height: rem(12) }}
-                            color={theme.colors.teal[6]}
-                            stroke={3}
-                          />
-                        ) : (
-                          <IconX
-                            style={{ width: rem(12), height: rem(12) }}
-                            color={theme.colors.red[6]}
-                            stroke={3}
-                          />
-                        )
-                      }
-                    />
-                  </Group>
-                  </Card.Section>
+      setTotalRecords(totalRecords);
+      setError(null);
+    } catch (error) {
+      setError('Failed to fetch data');
+      console.error('Error fetching data:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-                  <Card.Section inheritPadding mt="md">
+  const filterRecords = () => {
+    if (searchTerms.length === 0) {
+      setFilteredRecords(allRecords);
+    } else {
+      const filtered = allRecords.filter(record =>
+        Object.values(record).some(value =>
+          searchTerms.some(term =>
+            value.toLowerCase().includes(term.toLowerCase())
+          )
+        )
+      );
+      setFilteredRecords(filtered);
+    }
+    setCurrentPage(1);
+  };
+
+  const handleSearch = (term: string) => {
+    const terms = term.split(' ').filter(t => t.trim() !== '');
+    setSearchTerms(terms);
+  };
+
+  const currentRecord = filteredRecords[currentPage - 1] || null;
+  const totalPages = filteredRecords.length;
+
+  const preStyles: React.CSSProperties = {
+    fontFamily: 'inherit',
+    fontWeight: 300,
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    width: '100%',
+    margin: 0,
+    padding: theme.spacing.sm,
+    backgroundColor: 'lavenderblush',
+    borderRadius: theme.radius.md,
+    border: '1px solid black',
+  };
+
+  const customRenderers = {
+    p: ({ node, children }: any) => {
+      const content = Array.isArray(children) ? children.join('') : children;
+      return <Highlight highlight={searchTerms}>{content}</Highlight>;
+    },
+  };
+
+  return (
+    <>
+      <Group mt={10} justify="space-between">
+        <SearchComponent onSearch={handleSearch} />
+        <Group justify="flex-end" gap="xs">
+          <ActionIcon color='gray'>
+            <IconChevronLeft size="1rem" />
+          </ActionIcon>
+          <Button variant="default">Filter</Button>
+          <SortButton />
+        </Group>
+      </Group>
+      <Container my="md" fluid>
+        <Grid gutter="md">
+          <Grid.Col span={{ base: 12, md: 8 }}>
+            <Card shadow="sm" radius="md" withBorder pb={50}>
+              <Card.Section withBorder inheritPadding py="xs" style={{ backgroundColor: "lavenderblush" }}>
+                <Group justify="space-between" align="center">
+                  <Text fw={300} size="sm">Dataset Record</Text>
+                  <CustomPagination
+                    currentPage={currentPage}
+                    totalPages={totalPages}
+                    onPageChange={setCurrentPage}
+                  />
+                  <Switch
+                    checked={renderMarkdown}
+                    onChange={(event) => setRenderMarkdown(event.currentTarget.checked)}
+                    color="teal"
+                    size="sm"
+                    label="Markdown"
+                    thumbIcon={
+                      renderMarkdown ? (
+                        <IconCheck
+                          style={{ width: rem(12), height: rem(12) }}
+                          color={theme.colors.teal[6]}
+                          stroke={3}
+                        />
+                      ) : (
+                        <IconX
+                          style={{ width: rem(12), height: rem(12) }}
+                          color={theme.colors.red[6]}
+                          stroke={3}
+                        />
+                      )
+                    }
+                  />
+                </Group>
+              </Card.Section>
+
+              <Card.Section inheritPadding mt="md">
                 {loading ? (
                   <Text>Loading...</Text>
                 ) : error ? (
@@ -238,7 +210,19 @@ const LeadGrid: React.FC = () => {
                     <React.Fragment key={index}>
                       <Group justify="space-between" mb="xs">
                         <Badge color="rgba(255, 110, 110, 1)">{key}</Badge>
-                        <CopyButton text={value} />
+                        <CopyButton value={value} timeout={2000}>
+                          {({ copied, copy }) => (
+                            <Tooltip label={copied ? 'Copied' : 'Copy'} withArrow position="right">
+                              <ActionIcon color={copied ? 'teal' : 'gray'} variant="subtle" onClick={copy}>
+                                {copied ? (
+                                  <IconCheck style={{ width: rem(16) }} />
+                                ) : (
+                                  <IconCopy style={{ width: rem(16) }} />
+                                )}
+                              </ActionIcon>
+                            </Tooltip>
+                          )}
+                        </CopyButton>
                       </Group>
                       {renderMarkdown ? (
                         <ReactMarkdown components={customRenderers}>{value}</ReactMarkdown>
@@ -263,6 +247,6 @@ const LeadGrid: React.FC = () => {
       </Container>
     </>
   );
-}
+};
 
 export default LeadGrid;

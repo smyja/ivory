@@ -36,7 +36,7 @@ const Datasource = () => {
   return (
     <>
       <Box> 
-          <Center maw={1000} pt={180} >
+          <Center maw={1000} pt={160} >
            <IconDatabase 
              style={{ width: rem(80), height: rem(80), color:"tomato" }}
            /></Center>
