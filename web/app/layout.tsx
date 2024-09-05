@@ -12,7 +12,6 @@ import classes from "@styles/global.module.css"
 import { Notifications } from '@mantine/notifications';
 import '@mantine/notifications/styles.css';
 import '@mantine/dropzone/styles.css';
-import { Setup } from '../components/utils';
 
 const satoshi = localFont({
   src: [
@@ -39,7 +38,7 @@ const satoshi = localFont({
 export default function RootLayout({ children }: { children: any }) {
   return (
     
-    <Provider>
+
     <html lang="en">
       <head>
 
@@ -55,7 +54,7 @@ export default function RootLayout({ children }: { children: any }) {
         <MantineProvider theme={theme}>  
       
         <ModalsProvider>
-          <Setup/>
+          
         <Notifications  autoClose={4000} position="bottom-right" zIndex={1000} />
      
           {children}
@@ -63,6 +62,6 @@ export default function RootLayout({ children }: { children: any }) {
         </MantineProvider>
       </body>
     </html>
-    </Provider>
+  
   );
 }
