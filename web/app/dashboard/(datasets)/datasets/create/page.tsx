@@ -28,7 +28,7 @@ import {
 import { useDisclosure } from '@mantine/hooks';
 import { modals } from '@mantine/modals';
 import { redirect } from 'next/dist/server/api-utils';
-import AuthenticationTitle from '../view/import';
+import AuthenticationTitle from './import';
 
 const Datasource = () => {
   const [opened, { open, close }] = useDisclosure(false);

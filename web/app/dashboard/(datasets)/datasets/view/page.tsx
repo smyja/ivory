@@ -16,12 +16,21 @@ import {
   Highlight,
   CopyButton,
   Tooltip,
+  Modal,
 } from '@mantine/core';
 import ReactMarkdown from 'react-markdown';
-import { IconCopy, IconCheck, IconX, IconChevronLeft, IconChevronRight } from '@tabler/icons-react';
+import {
+  IconCopy,
+  IconCheck,
+  IconX,
+  IconChevronLeft,
+  IconChevronRight,
+  IconMaximize,
+} from '@tabler/icons-react';
 import { AccordionStats } from './(components)/accordion';
 import { SortButton } from './sort';
 import SearchComponent from './search';
+import ExpandedRecordModal from './expand';
 
 interface Record {
   [key: string]: string;
@@ -79,6 +88,8 @@ const LeadGrid: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [searchTerms, setSearchTerms] = useState<string[]>([]);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [selectedRecord, setSelectedRecord] = useState<{ key: string; value: string } | null>(null);
 
   useEffect(() => {
     fetchData();
@@ -237,23 +248,41 @@ const LeadGrid: React.FC = () => {
                     <React.Fragment key={index}>
                       <Group justify="space-between" mb="xs">
                         <Badge color="rgba(255, 110, 110, 1)">{key}</Badge>
-                        <CopyButton value={value} timeout={2000}>
-                          {({ copied, copy }) => (
-                            <Tooltip label={copied ? 'Copied' : 'Copy'} withArrow position="right">
-                              <ActionIcon
-                                color={copied ? 'teal' : 'gray'}
-                                variant="subtle"
-                                onClick={copy}
+                        <Group>
+                          <CopyButton value={value} timeout={2000}>
+                            {({ copied, copy }) => (
+                              <Tooltip
+                                label={copied ? 'Copied' : 'Copy'}
+                                withArrow
+                                position="right"
                               >
-                                {copied ? (
-                                  <IconCheck style={{ width: rem(16) }} />
-                                ) : (
-                                  <IconCopy style={{ width: rem(16) }} />
-                                )}
-                              </ActionIcon>
-                            </Tooltip>
-                          )}
-                        </CopyButton>
+                                <ActionIcon
+                                  color={copied ? 'teal' : 'gray'}
+                                  variant="subtle"
+                                  onClick={copy}
+                                >
+                                  {copied ? (
+                                    <IconCheck style={{ width: rem(16) }} />
+                                  ) : (
+                                    <IconCopy style={{ width: rem(16) }} />
+                                  )}
+                                </ActionIcon>
+                              </Tooltip>
+                            )}
+                          </CopyButton>
+                          <Tooltip label="Expand" withArrow position="right">
+                            <ActionIcon
+                              color="blue"
+                              variant="subtle"
+                              onClick={() => {
+                                setSelectedRecord({ key, value });
+                                setModalOpen(true);
+                              }}
+                            >
+                              <IconMaximize style={{ width: rem(16) }} />
+                            </ActionIcon>
+                          </Tooltip>
+                        </Group>
                       </Group>
                       {renderMarkdown ? (
                         <ReactMarkdown components={customRenderers}>{value}</ReactMarkdown>
@@ -275,6 +304,19 @@ const LeadGrid: React.FC = () => {
             <AccordionStats />
           </Grid.Col>
         </Grid>
+        <Modal
+          opened={modalOpen}
+          onClose={() => setModalOpen(false)}
+          centered
+          title={selectedRecord?.key}
+          size="lg"
+        >
+          <ExpandedRecordModal
+            record={selectedRecord}
+            renderMarkdown={renderMarkdown}
+            searchTerms={searchTerms}
+          />
+        </Modal>
       </Container>
     </>
   );
