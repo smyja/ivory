@@ -1,16 +1,16 @@
-"use client"; // Assuming you're using Next.js or a similar framework that requires this directive
+'use client'; // Assuming you're using Next.js or a similar framework that requires this directive
 
 import React, { useState } from 'react';
-import { Title, Text, Container, Space, Box, Flex } from "@mantine/core";
+import { Title, Text, Container, Space, Box, Flex } from '@mantine/core';
 import { ClusteringTable } from './table'; // Adjust the import path as needed
-import SearchComponent from '../new/search';
+import SearchComponent from '../view/search';
 import IndicatorBadge from './indicator'; // Adjust the import path for IndicatorBadge
 
 const statuses = [
-  { status: "Completed", color: "green" },
-  { status: "Processing", color: "blue" },
-  { status: "Failed", color: "red" },
-  { status: "Queued", color: "yellow" },
+  { status: 'Completed', color: 'green' },
+  { status: 'Processing', color: 'blue' },
+  { status: 'Failed', color: 'red' },
+  { status: 'Queued', color: 'yellow' },
 ];
 
 export default function Cluster() {
@@ -18,7 +18,7 @@ export default function Cluster() {
   const [selectedStatus, setSelectedStatus] = useState<string | null>(null);
 
   const handleSearch = (term: string) => {
-    const terms = term.split(' ').filter(t => t.trim() !== '');
+    const terms = term.split(' ').filter((t) => t.trim() !== '');
     setSearchTerms(terms);
   };
 
@@ -32,17 +32,11 @@ export default function Cluster() {
         Clusters
       </Title>
       <Text mb={10} c="dimmed">
-        Fast, Simple, Scalable and accelerated GPU clusters focused on
-        simplicity, speed, & affordability.
+        Fast, Simple, Scalable and accelerated GPU clusters focused on simplicity, speed, &
+        affordability.
       </Text>
-      <SearchComponent 
-  onSearch={handleSearch} 
-  width="100%" 
-  borderRadius="md" 
-/>
-<Space h="md" />
-
-    
+      <SearchComponent onSearch={handleSearch} width="100%" borderRadius="md" />
+      <Space h="md" />
 
       {/* Filter section */}
       <Box mb={10}>
@@ -57,7 +51,7 @@ export default function Cluster() {
               key={status}
               color={color}
               label={status}
-              processing={status === "Processing"}
+              processing={status === 'Processing'}
               textColor={selectedStatus === status ? color : 'gray'}
               onClick={() => handleStatusFilter(status)} // Handle click
               style={{ cursor: 'pointer' }} // Make the badge clickable
@@ -68,7 +62,7 @@ export default function Cluster() {
 
       <Space h="md" />
 
-      <ClusteringTable  selectedStatus={selectedStatus} />
+      <ClusteringTable selectedStatus={selectedStatus} />
     </Container>
   );
 }

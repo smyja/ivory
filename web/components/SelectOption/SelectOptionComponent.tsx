@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Combobox, Group, Input, InputBase, Text, useCombobox } from '@mantine/core';
 
 interface Item {
@@ -7,13 +7,13 @@ interface Item {
   description: string;
 }
 
-
 const dataFormats: Item[] = [
-    { emoji: '🤗', value: 'HuggingFace', description: 'AI model repository and collaboration platform'},
-    { emoji: '📊', value: 'CSV', description: 'CSV file format for tabular data'},
-    { emoji: '{ }', value: 'JSON', description: 'Json, a lightweight data interchange format'},
-    { emoji: '📦', value: 'Parquet', description: 'Columnar storage file format'},
-  ];
+  { emoji: '🤗', value: 'HuggingFace', description: 'AI model repository and collaboration platform'},
+  { emoji: '📊', value: 'CSV', description: 'CSV file format for tabular data'},
+  { emoji: '{ }', value: 'JSON', description: 'Json, a lightweight data interchange format'},
+  { emoji: '📦', value: 'Parquet', description: 'Columnar storage file format'},
+];
+
 function SelectOption({ emoji, value, description }: Item) {
   return (
     <Group>
@@ -30,16 +30,31 @@ function SelectOption({ emoji, value, description }: Item) {
   );
 }
 
-export function SelectOptionComponent() {
+interface SelectOptionComponentProps {
+  value: string;
+  onChange: (value: string) => void;
+  disabledOptions: string[];
+}
+
+export function SelectOptionComponent({ value, onChange, disabledOptions }: SelectOptionComponentProps) {
   const combobox = useCombobox({
     onDropdownClose: () => combobox.resetSelectedOption(),
   });
 
-  const [value, setValue] = useState<string | null>(null);
-  const selectedOption = dataFormats.find((item) => item.value === value);
+  const [selectedValue, setSelectedValue] = useState<string | null>(value);
+  
+  useEffect(() => {
+    setSelectedValue(value);
+  }, [value]);
+
+  const selectedOption = dataFormats.find((item) => item.value === selectedValue);
 
   const options = dataFormats.map((item) => (
-    <Combobox.Option value={item.value} key={item.value}>
+    <Combobox.Option 
+      value={item.value} 
+      key={item.value}
+      disabled={disabledOptions.includes(item.value)}
+    >
       <SelectOption {...item} />
     </Combobox.Option>
   ));
@@ -49,7 +64,8 @@ export function SelectOptionComponent() {
       store={combobox}
       withinPortal={false}
       onOptionSubmit={(val) => {
-        setValue(val);
+        setSelectedValue(val);
+        onChange(val);
         combobox.closeDropdown();
       }}
     >

@@ -1,7 +1,14 @@
 import React from 'react';
 import { Badge, Indicator } from '@mantine/core';
 
-const IndicatorBadge = ({ color, label, processing = false, textColor }) => {
+interface IndicatorBadgeProps {
+  color: string;
+  label: string;
+  processing?: boolean;
+  textColor?: string;
+}
+
+const IndicatorBadge: React.FC<IndicatorBadgeProps> = ({ color, label, processing = false, textColor = color }) => {
   return (
     <Indicator
       inline
@@ -22,7 +29,7 @@ const IndicatorBadge = ({ color, label, processing = false, textColor }) => {
             color: textColor, // Use the passed textColor here
             fontWeight: 400, // Set font weight
             textTransform: 'none', // Remove uppercase transformation
-            fontSize: "14px"
+            fontSize: '14px',
           },
         })}
       >

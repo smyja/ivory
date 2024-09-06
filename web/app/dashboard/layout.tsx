@@ -2,7 +2,6 @@
 import { useDisclosure } from '@mantine/hooks';
 import { AppShell, Burger, Group, Skeleton } from '@mantine/core';
 import { NavbarSimpleColored } from '@/components/Navbar/NavbarSimpleColored';
-import { RequireAuth } from '@/components/utils';
 
 export default function DashboardLayout({
   children, // will be a page or nested layout
@@ -18,7 +17,7 @@ export default function DashboardLayout({
         navbar={{ width: 300, breakpoint: 'sm', collapsed: { mobile: !opened } }}
         padding="md"
         layout='alt'
-        style={{backgroundColor: "white"}}
+        style={{backgroundColor: "#fafafa"}}
       >
         <AppShell.Header
          style={{backgroundColor: "white"}}

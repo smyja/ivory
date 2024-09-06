@@ -1,4 +1,5 @@
 'use client';
+
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { z } from 'zod';
@@ -7,42 +8,35 @@ import classes from '@styles/global.module.css';
 import { SelectOptionComponent } from '@/components/SelectOption/SelectOptionComponent';
 import {
   TextInput,
-  PasswordInput,
-  Checkbox,
-  Anchor,
   Paper,
   Title,
   Text,
   Container,
   Group,
   Button,
-  Divider,
 } from '@mantine/core';
 
 interface FormValues {
-  email: string;
-  password: string;
+  dataSource: string;
   datasetName: string;
   token: string;
 }
 
+const schema = z.object({
+  dataSource: z.string().min(1, { message: 'Data source is required' }),
+  datasetName: z.string().min(1, { message: 'Dataset name is required' }),
+  token: z.string().optional(),
+});
+
 export default function AuthenticationTitle({ onClose }: { onClose: () => void }) {
   const router = useRouter();
   const [isLoading, setIsLoading] = useState(false);
-  const [loginError, setLoginError] = useState<string | null>(null);
-
-  const schema = z.object({
-    email: z.string().email({ message: 'Invalid email' }),
-    password: z.string().min(6, { message: 'Password should be at least 6 characters long' }),
-    datasetName: z.string().min(1, { message: 'Dataset name is required' }),
-    token: z.string().optional(),
-  });
+  const [error, setError] = useState<string | null>(null);
 
   const form = useForm<FormValues>({
     validate: zodResolver(schema),
     initialValues: {
-      email: '',
-      password: '',
+      dataSource: 'HuggingFace',
       datasetName: '',
       token: '',
     },
@@ -50,19 +44,27 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
 
   const handleSubmit = async (values: FormValues) => {
     setIsLoading(true);
-    setLoginError(null);
+    setError(null);
 
     try {
-      // Here you would typically make an API call to create the dataset
-      // For now, we'll just simulate a delay
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      const response = await fetch('/api/datasets', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(values),
+      });
 
-      console.log('Dataset created:', values);
-      // After successful creation, you might want to redirect or show a success message
-      router.push('/dashboard'); // Adjust this as needed
+      if (!response.ok) {
+        throw new Error('Failed to create dataset');
+      }
+
+      const result = await response.json();
+      console.log('Dataset created:', result);
+      router.push('/dashboard');
     } catch (error) {
       console.error('Failed to create dataset:', error);
-      setLoginError('Failed to create dataset. Please try again.');
+      setError('Failed to create dataset. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -81,11 +83,15 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
           </Text>
 
           <Paper withBorder shadow="md" p={30} mt={30} radius="md">
-            <SelectOptionComponent />
+            <SelectOptionComponent
+              value={form.values.dataSource}
+              onChange={(value) => form.setFieldValue('dataSource', value)}
+              disabledOptions={['CSV', 'Parquet']}
+            />
             <TextInput
               {...form.getInputProps('datasetName')}
               label="Dataset Name"
-              placeholder="Enter your Dataset name(username/dataset)"
+              placeholder="Enter your Dataset name (username/dataset)"
               pt={10}
             />
 
@@ -96,19 +102,14 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
               placeholder="Enter your token"
             />
 
-      
-
             <Group justify="space-between" mt="md">
-              <Checkbox label="Remember me" />
-              <Anchor href="forgot-password" size="sm">
-                Forgot password?
-              </Anchor>
+              {/* Add any additional options here if needed */}
             </Group>
             <Button fullWidth mt="xl" type="submit" loading={isLoading}>
               Load dataset
             </Button>
 
-            {loginError && <Text color="red" mt="sm">{loginError}</Text>}
+            {error && <Text c="red" mt="sm">{error}</Text>}
           </Paper>
         </Container>
       </form>

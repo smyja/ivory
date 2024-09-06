@@ -1,9 +1,25 @@
-'use client'
+'use client';
 import React, { useState, useEffect } from 'react';
-import { Container, Grid, Card, Text, rem, Divider, Button, Group, Switch, useMantineTheme, Badge, ActionIcon, Highlight, CopyButton, Tooltip } from '@mantine/core';
+import {
+  Container,
+  Grid,
+  Card,
+  Text,
+  rem,
+  Divider,
+  Button,
+  Group,
+  Switch,
+  useMantineTheme,
+  Badge,
+  ActionIcon,
+  Highlight,
+  CopyButton,
+  Tooltip,
+} from '@mantine/core';
 import ReactMarkdown from 'react-markdown';
 import { IconCopy, IconCheck, IconX, IconChevronLeft, IconChevronRight } from '@tabler/icons-react';
-import { AccordionStats } from '../accordion';
+import { AccordionStats } from './(components)/accordion';
 import { SortButton } from './sort';
 import SearchComponent from './search';
 
@@ -25,11 +41,15 @@ interface CustomPaginationProps {
   onPageChange: (page: number) => void;
 }
 
-const CustomPagination: React.FC<CustomPaginationProps> = ({ currentPage, totalPages, onPageChange }) => {
+const CustomPagination: React.FC<CustomPaginationProps> = ({
+  currentPage,
+  totalPages,
+  onPageChange,
+}) => {
   return (
     <Group gap={5} align="center">
-      <ActionIcon 
-        color='gray'
+      <ActionIcon
+        color="gray"
         onClick={() => onPageChange(Math.max(1, currentPage - 1))}
         disabled={currentPage === 1}
       >
@@ -38,8 +58,8 @@ const CustomPagination: React.FC<CustomPaginationProps> = ({ currentPage, totalP
       <Text size="sm">
         {currentPage} of {totalPages.toLocaleString()}
       </Text>
-      <ActionIcon 
-        color='gray'
+      <ActionIcon
+        color="gray"
         onClick={() => onPageChange(Math.min(totalPages, currentPage + 1))}
         disabled={currentPage === totalPages}
       >
@@ -47,7 +67,7 @@ const CustomPagination: React.FC<CustomPaginationProps> = ({ currentPage, totalP
       </ActionIcon>
     </Group>
   );
-}
+};
 
 const LeadGrid: React.FC = () => {
   const theme = useMantineTheme();
@@ -72,31 +92,33 @@ const LeadGrid: React.FC = () => {
     setLoading(true);
     try {
       let allFetchedRecords: Record[] = [];
-          let page = 1;
-          let totalRecords = 0;
-          const pageSize = 50; // Assuming the backend is returning 50 records per page
-      
-          while (true) {
-            const response = await fetch(`http://0.0.0.0:8000/datasets/7/records?page=${page}&page_size=${pageSize}`);
-      if (!response.ok) {
-        throw new Error('Network response was not ok');
+      let page = 1;
+      let totalRecords = 0;
+      const pageSize = 50; // Assuming the backend is returning 50 records per page
+
+      while (true) {
+        const response = await fetch(
+          `http://0.0.0.0:8000/datasets/7/records?page=${page}&page_size=${pageSize}`
+        );
+        if (!response.ok) {
+          throw new Error('Network response was not ok');
+        }
+
+        const data: ApiResponse = await response.json();
+        totalRecords = data.total_records;
+
+        // Combine records from each page
+        allFetchedRecords = [...allFetchedRecords, ...data.records];
+
+        // If we've fetched all records, break the loop
+        if (allFetchedRecords.length >= totalRecords) {
+          break;
+        }
+
+        page += 1; // Move to the next page
       }
 
-      const data: ApiResponse = await response.json();
-      totalRecords = data.total_records;
-      
-            // Combine records from each page
-            allFetchedRecords = [...allFetchedRecords, ...data.records];
-      
-            // If we've fetched all records, break the loop
-            if (allFetchedRecords.length >= totalRecords) {
-              break;
-            }
-      
-            page += 1; // Move to the next page
-          }
-      
-          setAllRecords(allFetchedRecords);
+      setAllRecords(allFetchedRecords);
       setTotalRecords(totalRecords);
       setError(null);
     } catch (error) {
@@ -111,11 +133,9 @@ const LeadGrid: React.FC = () => {
     if (searchTerms.length === 0) {
       setFilteredRecords(allRecords);
     } else {
-      const filtered = allRecords.filter(record =>
-        Object.values(record).some(value =>
-          searchTerms.some(term =>
-            value.toLowerCase().includes(term.toLowerCase())
-          )
+      const filtered = allRecords.filter((record) =>
+        Object.values(record).some((value) =>
+          searchTerms.some((term) => value.toLowerCase().includes(term.toLowerCase()))
         )
       );
       setFilteredRecords(filtered);
@@ -124,7 +144,7 @@ const LeadGrid: React.FC = () => {
   };
 
   const handleSearch = (term: string) => {
-    const terms = term.split(' ').filter(t => t.trim() !== '');
+    const terms = term.split(' ').filter((t) => t.trim() !== '');
     setSearchTerms(terms);
   };
 
@@ -156,7 +176,7 @@ const LeadGrid: React.FC = () => {
       <Group mt={10} justify="space-between">
         <SearchComponent onSearch={handleSearch} />
         <Group justify="flex-end" gap="xs">
-          <ActionIcon color='gray'>
+          <ActionIcon color="gray">
             <IconChevronLeft size="1rem" />
           </ActionIcon>
           <Button variant="default">Filter</Button>
@@ -167,9 +187,16 @@ const LeadGrid: React.FC = () => {
         <Grid gutter="md">
           <Grid.Col span={{ base: 12, md: 8 }}>
             <Card shadow="sm" radius="md" withBorder pb={50}>
-              <Card.Section withBorder inheritPadding py="xs" style={{ backgroundColor: "lavenderblush" }}>
+              <Card.Section
+                withBorder
+                inheritPadding
+                py="xs"
+                style={{ backgroundColor: 'lavenderblush' }}
+              >
                 <Group justify="space-between" align="center">
-                  <Text fw={300} size="sm">Dataset Record</Text>
+                  <Text fw={300} size="sm">
+                    Dataset Record
+                  </Text>
                   <CustomPagination
                     currentPage={currentPage}
                     totalPages={totalPages}
@@ -213,7 +240,11 @@ const LeadGrid: React.FC = () => {
                         <CopyButton value={value} timeout={2000}>
                           {({ copied, copy }) => (
                             <Tooltip label={copied ? 'Copied' : 'Copy'} withArrow position="right">
-                              <ActionIcon color={copied ? 'teal' : 'gray'} variant="subtle" onClick={copy}>
+                              <ActionIcon
+                                color={copied ? 'teal' : 'gray'}
+                                variant="subtle"
+                                onClick={copy}
+                              >
                                 {copied ? (
                                   <IconCheck style={{ width: rem(16) }} />
                                 ) : (

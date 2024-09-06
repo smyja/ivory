@@ -26,8 +26,9 @@ const data = [
     label: 'Datasets',
     icon: IconDatabase,
     links: [
-      { link: '/dashboard/datasets', label: 'Overview' },
-      { link: '/dashboard/datasets/new', label: 'New Dataset' },
+      { link: '/dashboard/datasets', label: 'Datasets' },
+      { link: '/dashboard/datasets/create', label: 'Create Dataset' },
+      { link: '/dashboard/datasets/view', label: 'Dataset Explorer' },
       { link: '/dashboard/datasets/cluster', label: 'Cluster' },
     ],
   },
