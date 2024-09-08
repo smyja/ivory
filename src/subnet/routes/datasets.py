@@ -5,7 +5,7 @@ import logging
 import os
 import duckdb
 import pandas as pd
-from models import DatasetRequest, DatasetMetadataResponse, DatasetMetadata
+from models import DatasetRequest, DatasetMetadataResponse, DatasetMetadata, DownloadStatus
 from utils.database import get_db, download_and_save_dataset, get_active_downloads, verify_and_update_dataset_status
 
 router = APIRouter(prefix="/datasets")
@@ -29,8 +29,8 @@ async def list_datasets(db: Session = Depends(get_db)):
     return datasets
 
 @router.get("/active_downloads")
-async def list_active_downloads():
-    return get_active_downloads()
+async def list_active_downloads(db: Session = Depends(get_db)):
+    return get_active_downloads(db)
 
 @router.get("/{dataset_id}")
 async def get_dataset_info(dataset_id: int, db: Session = Depends(get_db)):
@@ -54,7 +54,7 @@ async def get_dataset_info(dataset_id: int, db: Session = Depends(get_db)):
     if not splits:
         raise HTTPException(status_code=404, detail=f"No splits found in dataset directory: {dataset_path}")
 
-    split_info = {}
+    rows_info = {}
     with get_duckdb_connection() as conn:
         for split in splits:
             split_path = os.path.join(dataset_path, split)
@@ -69,28 +69,17 @@ async def get_dataset_info(dataset_id: int, db: Session = Depends(get_db)):
 
             try:
                 conn.execute(f"CREATE OR REPLACE TABLE temp AS SELECT * FROM parquet_scan('{data_file}')")
-                columns = conn.execute("SELECT * FROM temp LIMIT 0").description
-                row_count = conn.execute("SELECT COUNT(*) FROM temp").fetchone()[0]
                 sample_rows = conn.execute("SELECT * FROM temp LIMIT 5").fetchdf().to_dict(orient="records")
-                split_info[split] = {
-                    "columns": [col[0] for col in columns],
-                    "row_count": row_count,
-                    "sample_rows": sample_rows
-                }
+                rows_info[split] = sample_rows
             except Exception as e:
                 logger.error(f"Error processing Parquet file {data_file}: {str(e)}")
-                split_info[split] = {"error": str(e)}
+                rows_info[split] = {"error": str(e)}
 
-    if not split_info:
+    if not rows_info:
         raise HTTPException(status_code=404, detail="No valid Parquet files found in any split")
 
-    return {
-        "id": dataset_metadata.id,
-        "name": dataset_metadata.name,
-        "subset": dataset_metadata.subset,
-        "status": dataset_metadata.status,
-        "splits": split_info
-    }
+    return rows_info
+
 @router.get("/{dataset_id}/records")
 async def get_dataset_records(
     dataset_id: int,
@@ -188,3 +177,21 @@ async def verify_dataset(dataset_id: int, db: Session = Depends(get_db)):
         return {"status": "success", "message": message}
     else:
         raise HTTPException(status_code=400, detail=message)
+
+
+@router.post("/update_status")
+async def update_download_status(
+    dataset_id: int,
+    status: DownloadStatus,
+    db: Session = Depends(get_db)
+):
+    # Find the dataset record
+    dataset_metadata = db.query(DatasetMetadata).filter(DatasetMetadata.id == dataset_id).first()
+    if not dataset_metadata:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    # Update the status
+    dataset_metadata.status = status
+    db.commit()
+    
+    return {"message": "Status updated successfully"}

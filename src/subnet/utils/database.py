@@ -1,14 +1,13 @@
 ### utils/database.py
 import os
-import shutil
-from sqlalchemy import create_engine, Table, MetaData, Column, String
+import requests
+from sqlalchemy import create_engine, MetaData
 from sqlalchemy.orm import sessionmaker, Session
-from models import Base, DatasetMetadata, DownloadStatus
+from models import Base, DatasetMetadata, DownloadStatus, DatasetRequest
 from datasets import load_dataset
 import pandas as pd
 from typing import Dict
-from datetime import datetime
-import pyarrow.parquet as pq
+from fastapi import HTTPException
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -29,7 +28,12 @@ def get_db():
     finally:
         db.close()
 
-def download_and_save_dataset(db: Session, request):
+
+BASE_API_URL = "https://datasets-server.huggingface.co/rows"
+
+logger = logging.getLogger(__name__)
+
+def download_and_save_dataset(db: Session, request: DatasetRequest):
     new_metadata = None
     try:
         new_metadata = DatasetMetadata(
@@ -42,46 +46,62 @@ def download_and_save_dataset(db: Session, request):
         db.commit()
         db.refresh(new_metadata)
 
-        # Load the dataset
-        dataset = load_dataset(
-            request.dataset_name,
-            name=request.subset,
-            split=request.split,
-            cache_dir="temp_datasets"
-        )
+        if request.num_rows:
+            # Use the API to download a specific number of rows
+            logger.info(f"Fetching {request.num_rows} rows via API for dataset: {request.dataset_name}")
 
-        # Define the final path
+            config_param = f"&config={request.config}" if request.config else ""
+            api_url = (f"https://datasets-server.huggingface.co/rows?"
+                       f"dataset={request.dataset_name}"
+                       f"{config_param}"
+                       f"&split={request.split}"
+                       f"&offset=0"
+                       f"&length={min(request.num_rows or 100, 100)}")
+
+            logger.info(f"Fetching data from URL: {api_url}")
+
+            response = requests.get(api_url)
+            if response.status_code == 404:
+                raise HTTPException(status_code=404, detail=f"Resource not found: {response.text}")
+            if response.status_code != 200:
+                raise HTTPException(status_code=response.status_code, detail=f"Error fetching dataset: {response.text}")
+
+            api_data = response.json()
+            rows = api_data['rows']
+            data = [row['row'] for row in rows]
+            df = pd.DataFrame(data)
+
+        else:
+            # Use the HF library to download the entire dataset
+            logger.info(f"Loading full dataset directly: {request.dataset_name}")
+
+            dataset = load_dataset(
+                request.dataset_name,
+                name=request.subset,
+                split=request.split,
+                cache_dir="temp_datasets"
+            )
+
+            if isinstance(dataset, dict):
+                df = pd.concat([split_dataset.to_pandas() for split_dataset in dataset.values()])
+            else:
+                df = dataset.to_pandas()
+
+        # Save the DataFrame to a Parquet file
         final_path = os.path.join("datasets", request.dataset_name.replace("/", "_"))
         if request.subset:
             final_path = os.path.join(final_path, request.subset)
 
         os.makedirs(final_path, exist_ok=True)
-        logger.info(f"Created directory: {final_path}")
+        parquet_file = os.path.join(final_path, "data.parquet")
+        df.to_parquet(parquet_file, index=False)
+        logger.info(f"Dataset saved to: {parquet_file}")
 
-        # Handle different types of dataset objects
-        if isinstance(dataset, dict):  # DatasetDict
-            for split_name, split_dataset in dataset.items():
-                split_path = os.path.join(final_path, split_name)
-                os.makedirs(split_path, exist_ok=True)
-                parquet_file = os.path.join(split_path, "data.parquet")
-                df = split_dataset.to_pandas()
-                df.to_parquet(parquet_file, index=False)
-                logger.info(f"Saved {split_name} split to: {parquet_file}")
-        else:  # Single Dataset
-            split_name = request.split if request.split else "train"
-            split_path = os.path.join(final_path, split_name)
-            os.makedirs(split_path, exist_ok=True)
-            parquet_file = os.path.join(split_path, "data.parquet")
-            df = dataset.to_pandas()
-            df.to_parquet(parquet_file, index=False)
-            logger.info(f"Saved dataset to: {parquet_file}")
-
-        # Verify at least one file was created
-        if any(os.path.exists(os.path.join(final_path, split, "data.parquet")) for split in os.listdir(final_path) if os.path.isdir(os.path.join(final_path, split))):
-            logger.info(f"Verified at least one Parquet file exists in: {final_path}")
+        if os.path.exists(parquet_file):
+            logger.info(f"Verified Parquet file exists in: {final_path}")
             new_metadata.status = DownloadStatus.COMPLETED
         else:
-            logger.error(f"Failed to create any Parquet files in: {final_path}")
+            logger.error(f"Failed to create Parquet file in: {final_path}")
             new_metadata.status = DownloadStatus.FAILED
 
         db.commit()
@@ -95,7 +115,7 @@ def download_and_save_dataset(db: Session, request):
         raise e
 
     finally:
-        # Clean up temporary files
+        # Clean up temporary files if any
         if os.path.exists("temp_datasets"):
             import shutil
             shutil.rmtree("temp_datasets")
@@ -150,5 +170,17 @@ def verify_and_update_dataset_status(db: Session, dataset_id: int):
         logger.error(error_message)
         return False, error_message
 
-def get_active_downloads():
-    return active_downloads
+def get_active_downloads(db: Session):
+    active_downloads = db.query(DatasetMetadata).filter(
+        DatasetMetadata.status == DownloadStatus.IN_PROGRESS
+    ).all()
+    
+    return [
+        {
+            "id": download.id,
+            "dataset": download.name,
+            "status": download.status.value,
+            "download_date": download.download_date
+        }
+        for download in active_downloads
+    ]

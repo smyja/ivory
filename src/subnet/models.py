@@ -30,9 +30,10 @@ class ClusteredQuestion(Question):
 
 class DatasetRequest(BaseModel):
     dataset_name: str
-    subset: Optional[str] = None
     split: Optional[str] = None
-    cache_dir: str = "./datasets"
+    num_rows: Optional[int] = None
+    config: Optional[str] = "default"
+    subset: Optional[str] = None
 
 class DatasetMetadata(Base):
     __tablename__ = 'dataset_metadata'
