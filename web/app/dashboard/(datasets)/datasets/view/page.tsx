@@ -31,6 +31,7 @@ import { AccordionStats } from './(components)/accordion';
 import { SortButton } from './sort';
 import SearchComponent from './search';
 import ExpandedRecordModal from './expand';
+import CustomPagination from './pagination';
 
 interface Record {
   [key: string]: string;
@@ -43,40 +44,6 @@ interface ApiResponse {
   page_size: number;
   records: Record[];
 }
-
-interface CustomPaginationProps {
-  currentPage: number;
-  totalPages: number;
-  onPageChange: (page: number) => void;
-}
-
-const CustomPagination: React.FC<CustomPaginationProps> = ({
-  currentPage,
-  totalPages,
-  onPageChange,
-}) => {
-  return (
-    <Group gap={5} align="center">
-      <ActionIcon
-        color="gray"
-        onClick={() => onPageChange(Math.max(1, currentPage - 1))}
-        disabled={currentPage === 1}
-      >
-        <IconChevronLeft size="1rem" />
-      </ActionIcon>
-      <Text size="sm">
-        {currentPage} of {totalPages.toLocaleString()}
-      </Text>
-      <ActionIcon
-        color="gray"
-        onClick={() => onPageChange(Math.min(totalPages, currentPage + 1))}
-        disabled={currentPage === totalPages}
-      >
-        <IconChevronRight size="1rem" />
-      </ActionIcon>
-    </Group>
-  );
-};
 
 const LeadGrid: React.FC = () => {
   const theme = useMantineTheme();
