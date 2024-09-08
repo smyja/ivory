@@ -80,7 +80,7 @@ export function NavbarSimpleColored() {
                       : ''
                   }`}
                 >
-                  <Group justify="space-between" gap={108}>
+                  <Group justify="space-between">
                     <Box style={{ display: 'flex', alignItems: 'center' }}>
                       <item.icon className={classes.linkIcon} stroke={1.5} />
                       <span>{item.label}</span>
