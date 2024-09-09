@@ -6,7 +6,6 @@ import { MantineProvider, ColorSchemeScript } from "@mantine/core";
 import { ModalsProvider } from '@mantine/modals';
 
 import { theme } from "../theme";
-import Provider from '../redux/provider';
 import localFont from 'next/font/local'
 import classes from "@styles/global.module.css"
 import { Notifications } from '@mantine/notifications';
