@@ -30,7 +30,7 @@ class ClusteredQuestion(Question):
 
 class DatasetRequest(BaseModel):
     dataset_name: str
-    split: Optional[str] = None
+    split: Optional[str] = "train"
     num_rows: Optional[int] = None
     config: Optional[str] = "default"
     subset: Optional[str] = None
