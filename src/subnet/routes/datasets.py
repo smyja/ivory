@@ -40,6 +40,7 @@ async def get_dataset_info(dataset_id: int, db: Session = Depends(get_db)):
 
     logger.info(f"Found dataset metadata for id {dataset_id}: {dataset_metadata.__dict__}")
 
+    # Improved path construction
     dataset_path = os.path.join("datasets", dataset_metadata.name.replace("/", "_"))
     if dataset_metadata.subset:
         dataset_path = os.path.join(dataset_path, dataset_metadata.subset)
@@ -49,7 +50,17 @@ async def get_dataset_info(dataset_id: int, db: Session = Depends(get_db)):
     if not os.path.exists(dataset_path):
         raise HTTPException(status_code=404, detail=f"Dataset directory not found: {dataset_path}")
 
-    splits = [split for split in os.listdir(dataset_path) if os.path.isdir(os.path.join(dataset_path, split))]
+    # More flexible split handling
+    if dataset_metadata.split:
+        split_path = os.path.join(dataset_path, dataset_metadata.split)
+        if os.path.exists(split_path):
+            splits = [dataset_metadata.split]
+        else:
+            splits = [split for split in os.listdir(dataset_path) if os.path.isdir(os.path.join(dataset_path, split))]
+    else:
+        splits = [split for split in os.listdir(dataset_path) if os.path.isdir(os.path.join(dataset_path, split))]
+
+    logger.info(f"Found splits: {splits}")
     
     if not splits:
         raise HTTPException(status_code=404, detail=f"No splits found in dataset directory: {dataset_path}")
@@ -58,6 +69,7 @@ async def get_dataset_info(dataset_id: int, db: Session = Depends(get_db)):
     with get_duckdb_connection() as conn:
         for split in splits:
             split_path = os.path.join(dataset_path, split)
+            logger.info(f"Processing split: {split_path}")
             parquet_files = [f for f in os.listdir(split_path) if f.endswith('.parquet')]
             
             if not parquet_files:
@@ -69,8 +81,14 @@ async def get_dataset_info(dataset_id: int, db: Session = Depends(get_db)):
 
             try:
                 conn.execute(f"CREATE OR REPLACE TABLE temp AS SELECT * FROM parquet_scan('{data_file}')")
+                columns = conn.execute("SELECT * FROM temp LIMIT 0").description
+                row_count = conn.execute("SELECT COUNT(*) FROM temp").fetchone()[0]
                 sample_rows = conn.execute("SELECT * FROM temp LIMIT 5").fetchdf().to_dict(orient="records")
-                rows_info[split] = sample_rows
+                rows_info[split] = {
+                    "columns": [col[0] for col in columns],
+                    "row_count": row_count,
+                    "sample_rows": sample_rows
+                }
             except Exception as e:
                 logger.error(f"Error processing Parquet file {data_file}: {str(e)}")
                 rows_info[split] = {"error": str(e)}
@@ -78,7 +96,13 @@ async def get_dataset_info(dataset_id: int, db: Session = Depends(get_db)):
     if not rows_info:
         raise HTTPException(status_code=404, detail="No valid Parquet files found in any split")
 
-    return rows_info
+    return {
+        "id": dataset_metadata.id,
+        "name": dataset_metadata.name,
+        "subset": dataset_metadata.subset,
+        "status": dataset_metadata.status,
+        "splits": rows_info
+    }
 
 @router.get("/{dataset_id}/records")
 async def get_dataset_records(

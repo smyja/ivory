@@ -91,6 +91,8 @@ def download_and_save_dataset(db: Session, request: DatasetRequest):
         final_path = os.path.join("datasets", request.dataset_name.replace("/", "_"))
         if request.subset:
             final_path = os.path.join(final_path, request.subset)
+        if request.split:
+            final_path = os.path.join(final_path, request.split)
 
         os.makedirs(final_path, exist_ok=True)
         parquet_file = os.path.join(final_path, "data.parquet")
@@ -137,25 +139,25 @@ def verify_and_update_dataset_status(db: Session, dataset_id: int):
         return False, f"Dataset directory not found: {dataset_path}"
 
     try:
-        # Check for dataset_dict.json
-        dataset_dict_path = os.path.join(dataset_path, "dataset_dict.json")
-        if not os.path.exists(dataset_dict_path):
-            raise FileNotFoundError(f"dataset_dict.json not found at {dataset_dict_path}")
-        logger.info(f"Found dataset_dict.json at {dataset_dict_path}")
+        # Check for the Parquet file
+        parquet_file = os.path.join(dataset_path, "data.parquet")
+        if not os.path.exists(parquet_file):
+            raise FileNotFoundError(f"Parquet file not found at {parquet_file}")
+        logger.info(f"Found Parquet file at {parquet_file}")
 
-        # Check for train directory
-        train_path = os.path.join(dataset_path, "train")
-        if not os.path.exists(train_path):
-            raise FileNotFoundError(f"train directory not found at {train_path}")
-        logger.info(f"Found train directory at {train_path}")
+        # Optionally, check for dataset_info.json if you're creating it
+        info_file = os.path.join(dataset_path, "dataset_info.json")
+        if os.path.exists(info_file):
+            logger.info(f"Found dataset_info.json at {info_file}")
+        else:
+            logger.warning(f"dataset_info.json not found at {info_file}")
 
-        # Check for files in train directory
-        required_files = ['data-00000-of-00001.arrow', 'dataset_info.json', 'state.json']
-        for file in required_files:
-            file_path = os.path.join(train_path, file)
-            if not os.path.exists(file_path):
-                raise FileNotFoundError(f"{file} not found at {file_path}")
-            logger.info(f"Found {file} at {file_path}")
+        # Verify the Parquet file can be read
+        try:
+            pd.read_parquet(parquet_file)
+            logger.info("Successfully read Parquet file")
+        except Exception as e:
+            raise ValueError(f"Error reading Parquet file: {str(e)}")
 
         # If we've made it this far, consider the dataset valid
         dataset_metadata.status = DownloadStatus.COMPLETED

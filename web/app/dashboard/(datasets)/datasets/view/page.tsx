@@ -76,7 +76,7 @@ const LeadGrid: React.FC = () => {
 
       while (true) {
         const response = await fetch(
-          `http://0.0.0.0:8000/datasets/7/records?page=${page}&page_size=${pageSize}`
+          `http://0.0.0.0:8000/datasets/29/records?page=${page}&page_size=${pageSize}`
         );
         if (!response.ok) {
           throw new Error('Network response was not ok');

@@ -115,7 +115,7 @@ const InteractiveRecordModal: React.FC<InteractiveRecordModalProps> = ({ record 
           position="bottom-start"
           styles={(theme) => ({
             dropdown: {
-              position: 'fixed',
+             
               left: `${currentSelection.range.getBoundingClientRect().left + window.scrollX}px`,
               top: `${currentSelection.range.getBoundingClientRect().bottom + window.scrollY}px`,
             },
