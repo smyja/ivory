@@ -1,3 +1,4 @@
+'use client';
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { Menu, Button, Text, rem, Badge, Group } from '@mantine/core';
 import { IconX } from '@tabler/icons-react';
@@ -11,11 +12,19 @@ interface Selection {
 
 interface InteractiveRecordModalProps {
   record: { key: string; value: string } | null;
+  onApplySelections: (selections: Selection[]) => void; // <-- New prop
 }
 
-const InteractiveRecordModal: React.FC<InteractiveRecordModalProps> = ({ record }) => {
+const InteractiveRecordModal: React.FC<InteractiveRecordModalProps> = ({
+  record,
+  onApplySelections,
+}) => {
   const [selections, setSelections] = useState<Selection[]>([]);
-  const [currentSelection, setCurrentSelection] = useState<{ text: string, range: Range } | null>(null);
+  const [currentSelection, setCurrentSelection] = useState<{
+    text: string;
+    range: Range;
+  } | null>(null);
+
   const contentRef = useRef<HTMLDivElement>(null);
 
   const handleTextHighlight = useCallback(() => {
@@ -28,20 +37,29 @@ const InteractiveRecordModal: React.FC<InteractiveRecordModalProps> = ({ record 
     }
   }, []);
 
-  const handleSelection = (type: 'key' | 'value') => {
+  // Simplified to only handle keys - values are implicit
+  const handleSelection = () => {
     if (!currentSelection) return;
-    const number = selections.filter(s => s.type === type).length + 1;
-    setSelections(prev => [...prev, { type, number, text: currentSelection.text, range: currentSelection.range }]);
+    const number = selections.length + 1;
+    setSelections((prev) => [
+      ...prev,
+      { 
+        type: 'key', 
+        number, 
+        text: currentSelection.text, 
+        range: currentSelection.range 
+      }
+    ]);
     setCurrentSelection(null);
     window.getSelection()?.removeAllRanges();
   };
 
   const removeSelection = (index: number) => {
-    setSelections(prev => {
+    setSelections((prev) => {
       const newSelections = prev.filter((_, i) => i !== index);
       return newSelections.map((selection, i) => ({
         ...selection,
-        number: newSelections.filter((s, j) => s.type === selection.type && j <= i).length
+        number: newSelections.filter((s, j) => s.type === selection.type && j <= i).length,
       }));
     });
   };
@@ -50,7 +68,7 @@ const InteractiveRecordModal: React.FC<InteractiveRecordModalProps> = ({ record 
     if (!contentRef.current) return;
 
     // Remove existing highlights
-    contentRef.current.querySelectorAll('mark').forEach(mark => {
+    contentRef.current.querySelectorAll('mark').forEach((mark) => {
       const parent = mark.parentNode;
       if (parent) {
         parent.insertBefore(document.createTextNode(mark.textContent || ''), mark);
@@ -58,10 +76,10 @@ const InteractiveRecordModal: React.FC<InteractiveRecordModalProps> = ({ record 
       }
     });
 
-    // Apply new highlights
-    selections.forEach(selection => {
+    // Only highlight keys
+    selections.forEach((selection) => {
       const mark = document.createElement('mark');
-      mark.style.backgroundColor = selection.type === 'key' ? 'rgba(255,0,0,0.2)' : 'rgba(0,255,0,0.2)';
+      mark.style.backgroundColor = 'rgba(255,0,0,0.2)';
       selection.range.surroundContents(mark);
     });
   }, [selections]);
@@ -70,6 +88,7 @@ const InteractiveRecordModal: React.FC<InteractiveRecordModalProps> = ({ record 
     highlightSelections();
   }, [highlightSelections]);
 
+  // We can also style our <pre> area
   const preStyles: React.CSSProperties = {
     fontFamily: 'inherit',
     fontWeight: 300,
@@ -90,15 +109,16 @@ const InteractiveRecordModal: React.FC<InteractiveRecordModalProps> = ({ record 
         {selections.map((selection, index) => (
           <Badge
             key={index}
-            color={selection.type === 'key' ? 'red' : 'green'}
+            color="red"
             rightSection={
               <IconX size="0.8rem" style={{ cursor: 'pointer' }} onClick={() => removeSelection(index)} />
             }
           >
-            {`${selection.type === 'key' ? 'K' : 'V'}${selection.number}: ${selection.text}`}
+            {`Key ${selection.number}: ${selection.text}`}
           </Badge>
         ))}
       </Group>
+
       <div
         ref={contentRef}
         style={{ marginTop: '20px', ...preStyles }}
@@ -107,29 +127,37 @@ const InteractiveRecordModal: React.FC<InteractiveRecordModalProps> = ({ record 
       >
         {record?.value}
       </div>
+
+      {/* Simplified menu - only "Select as Key" option */}
       {currentSelection && (
-        <Menu 
+        <Menu
           opened={!!currentSelection}
           onClose={() => setCurrentSelection(null)}
           withArrow
           position="bottom-start"
           styles={(theme) => ({
             dropdown: {
-             
               left: `${currentSelection.range.getBoundingClientRect().left + window.scrollX}px`,
               top: `${currentSelection.range.getBoundingClientRect().bottom + window.scrollY}px`,
             },
           })}
         >
           <Menu.Target>
-            <Button size="xs" style={{ visibility: 'hidden' }}>Select as</Button>
+            <Button size="xs" style={{ visibility: 'hidden' }}>
+              Select as Key
+            </Button>
           </Menu.Target>
           <Menu.Dropdown>
-            <Menu.Item onClick={() => handleSelection('key')}>Select as Key {selections.filter(s => s.type === 'key').length + 1}</Menu.Item>
-            <Menu.Item onClick={() => handleSelection('value')}>Select as Value {selections.filter(s => s.type === 'value').length + 1}</Menu.Item>
+            <Menu.Item onClick={() => handleSelection()}>
+              Select as Key {selections.length + 1}
+            </Menu.Item>
           </Menu.Dropdown>
         </Menu>
       )}
+
+      <Group position="right" mt="md">
+        <Button onClick={() => onApplySelections(selections)}>Apply</Button>
+      </Group>
     </div>
   );
 };

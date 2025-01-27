@@ -18,7 +18,6 @@ import {
   Tooltip,
   Modal,
 } from '@mantine/core';
-import ReactMarkdown from 'react-markdown';
 import {
   IconCopy,
   IconCheck,
@@ -27,10 +26,12 @@ import {
   IconChevronRight,
   IconMaximize,
 } from '@tabler/icons-react';
+import ReactMarkdown from 'react-markdown';
+
+import InteractiveRecordModal from './expand';
 import { AccordionStats } from './(components)/accordion';
 import { SortButton } from './sort';
 import SearchComponent from './search';
-import ExpandedRecordModal from './expand';
 import CustomPagination from './pagination';
 
 interface Record {
@@ -43,6 +44,14 @@ interface ApiResponse {
   page: number;
   page_size: number;
   records: Record[];
+}
+
+// Our selection interface
+interface Selection {
+  type: 'key' | 'value';
+  number: number;
+  text: string;
+  range: Range;
 }
 
 const LeadGrid: React.FC = () => {
@@ -71,35 +80,33 @@ const LeadGrid: React.FC = () => {
     try {
       let allFetchedRecords: Record[] = [];
       let page = 1;
-      let totalRecords = 0;
-      const pageSize = 50; // Assuming the backend is returning 50 records per page
+      let total = 0;
+      const pageSize = 50;
 
       while (true) {
         const response = await fetch(
-          `http://0.0.0.0:8000/datasets/29/records?page=${page}&page_size=${pageSize}`
+          `http://127.0.0.1:8000/datasets/29/records?page=${page}&page_size=${pageSize}`
         );
         if (!response.ok) {
           throw new Error('Network response was not ok');
         }
 
         const data: ApiResponse = await response.json();
-        totalRecords = data.total_records;
+        total = data.total_records;
 
-        // Combine records from each page
         allFetchedRecords = [...allFetchedRecords, ...data.records];
 
-        // If we've fetched all records, break the loop
-        if (allFetchedRecords.length >= totalRecords) {
+        if (allFetchedRecords.length >= total) {
           break;
         }
-
-        page += 1; // Move to the next page
+        page += 1;
       }
 
       setAllRecords(allFetchedRecords);
-      setTotalRecords(totalRecords);
+      setFilteredRecords(allFetchedRecords); // Start with the same as allRecords
+      setTotalRecords(total);
       setError(null);
-    } catch (error) {
+    } catch (error: any) {
       setError('Failed to fetch data');
       console.error('Error fetching data:', error);
     } finally {
@@ -126,6 +133,101 @@ const LeadGrid: React.FC = () => {
     setSearchTerms(terms);
   };
 
+  /**
+   * Called by the InteractiveRecordModal after the user highlights text
+   * and chooses "Key" or "Value," then hits "Apply."
+   */
+  const handleApplySelections = (selections: Selection[]) => {
+    setModalOpen(false);
+    if (!selectedRecord) return;
+
+    // Get all key selections in order
+    const keys = selections
+      .filter(s => s.type === 'key')
+      .sort((a, b) => a.range.startOffset - b.range.startOffset);
+
+    if (keys.length === 0) return;
+
+    // Update both allRecords and filteredRecords
+    const updateRecords = (records: Record[]) => {
+      return records.map(record => {
+        // Only process records that have a chat field
+        if (!record.chat) {
+          return record;
+        }
+
+        const newRecord = { ...record };
+
+        // Remove any existing structured fields
+        Object.keys(newRecord).forEach(key => {
+          if (key.startsWith('structured_key_') || key.startsWith('structured_value_')) {
+            delete newRecord[key];
+          }
+        });
+
+        // Split the chat content by the selected keys
+        const chatContent = record.chat;
+        let structuredIndex = 1;
+
+        // Find all occurrences of each key
+        const allOccurrences: { key: string; index: number }[] = [];
+
+        // For each key type (e.g., "USER:", "A:")
+        keys.forEach(keySelection => {
+          let pos = 0;
+          const keyText = keySelection.text;
+
+          // Find all occurrences of this key
+          while (pos < chatContent.length) {
+            const index = chatContent.indexOf(keyText, pos);
+            if (index === -1) break;
+
+            allOccurrences.push({
+              key: keyText,
+              index: index
+            });
+            pos = index + keyText.length;
+          }
+        });
+
+        // Sort all occurrences by their position in the text
+        allOccurrences.sort((a, b) => a.index - b.index);
+
+        // Process each occurrence
+        allOccurrences.forEach((occurrence, index) => {
+          const startIndex = occurrence.index + occurrence.key.length;
+          const nextOccurrence = allOccurrences[index + 1];
+          const endIndex = nextOccurrence ? nextOccurrence.index : chatContent.length;
+
+          // Extract the value (everything between this key and the next)
+          const value = chatContent
+            .slice(startIndex, endIndex)
+            .trim();
+
+          // Add the structured fields
+          newRecord[`structured_key_${structuredIndex}`] = occurrence.key;
+          newRecord[`structured_value_${structuredIndex}`] = value;
+
+          structuredIndex++;
+        });
+
+        return newRecord;
+      });
+    };
+
+    setAllRecords(prev => {
+      const updated = updateRecords(prev);
+      console.log('All records updated:', updated);
+      return updated;
+    });
+
+    setFilteredRecords(prev => {
+      const updated = updateRecords(prev);
+      console.log('Filtered records updated:', updated);
+      return updated;
+    });
+  };
+
   const currentRecord = filteredRecords[currentPage - 1] || null;
   const totalPages = filteredRecords.length;
 
@@ -149,11 +251,35 @@ const LeadGrid: React.FC = () => {
     },
   };
 
+  // Add this helper function at component level
+  const getStructuredFields = (record: Record) => {
+    const fields: { key: string; value: string }[] = [];
+    let index = 1;
+
+    while (record[`structured_key_${index}`]) {
+      fields.push({
+        key: record[`structured_key_${index}`],
+        value: record[`structured_value_${index}`]
+      });
+      index++;
+    }
+
+    return fields;
+  };
+
+  // Helper to get non-structured fields
+  const getOriginalFields = (record: Record) => {
+    return Object.entries(record).filter(([key]) => 
+      !key.startsWith('structured_key_') && 
+      !key.startsWith('structured_value_')
+    );
+  };
+
   return (
     <>
-      <Group mt={10} justify="space-between">
+      <Group mt={10} position="apart">
         <SearchComponent onSearch={handleSearch} />
-        <Group justify="flex-end" gap="xs">
+        <Group spacing="xs">
           <ActionIcon color="gray">
             <IconChevronLeft size="1rem" />
           </ActionIcon>
@@ -161,6 +287,7 @@ const LeadGrid: React.FC = () => {
           <SortButton />
         </Group>
       </Group>
+
       <Container my="md" fluid>
         <Grid gutter="md">
           <Grid.Col span={{ base: 12, md: 8 }}>
@@ -171,7 +298,7 @@ const LeadGrid: React.FC = () => {
                 py="xs"
                 style={{ backgroundColor: 'lavenderblush' }}
               >
-                <Group justify="space-between" align="center">
+                <Group position="apart" align="center">
                   <Text fw={300} size="sm">
                     Dataset Record
                   </Text>
@@ -211,56 +338,115 @@ const LeadGrid: React.FC = () => {
                 ) : error ? (
                   <Text c="red">{error}</Text>
                 ) : currentRecord ? (
-                  Object.entries(currentRecord).map(([key, value], index) => (
-                    <React.Fragment key={index}>
-                      <Group justify="space-between" mb="xs">
-                        <Badge color="rgba(255, 110, 110, 1)">{key}</Badge>
-                        <Group>
-                          <CopyButton value={value} timeout={2000}>
-                            {({ copied, copy }) => (
-                              <Tooltip
-                                label={copied ? 'Copied' : 'Copy'}
-                                withArrow
-                                position="right"
+                  <>
+                    {/* Show all original fields */}
+                    {getOriginalFields(currentRecord).map(([fieldKey, fieldValue], index) => (
+                      <React.Fragment key={fieldKey}>
+                        <Group p="apart" mb="xs">
+                          <Badge color={fieldKey === 'chat' ? 'blue' : 'gray'}>{fieldKey}</Badge>
+                          <Group justify="xs">
+                            <CopyButton value={fieldValue} timeout={2000}>
+                              {({ copied, copy }) => (
+                                <Tooltip label={copied ? 'Copied' : 'Copy'} withArrow position="right">
+                                  <ActionIcon color={copied ? 'teal' : 'gray'} variant="subtle" onClick={copy}>
+                                    {copied ? (
+                                      <IconCheck style={{ width: rem(16) }} />
+                                    ) : (
+                                      <IconCopy style={{ width: rem(16) }} />
+                                    )}
+                                  </ActionIcon>
+                                </Tooltip>
+                              )}
+                            </CopyButton>
+                            <Tooltip label="Expand" withArrow position="right">
+                              <ActionIcon
+                                color="blue"
+                                variant="subtle"
+                                onClick={() => {
+                                  setSelectedRecord({ key: fieldKey, value: fieldValue });
+                                  setModalOpen(true);
+                                }}
                               >
-                                <ActionIcon
-                                  color={copied ? 'teal' : 'gray'}
-                                  variant="subtle"
-                                  onClick={copy}
-                                >
-                                  {copied ? (
-                                    <IconCheck style={{ width: rem(16) }} />
-                                  ) : (
-                                    <IconCopy style={{ width: rem(16) }} />
-                                  )}
-                                </ActionIcon>
-                              </Tooltip>
-                            )}
-                          </CopyButton>
-                          <Tooltip label="Expand" withArrow position="right">
-                            <ActionIcon
-                              color="blue"
-                              variant="subtle"
-                              onClick={() => {
-                                setSelectedRecord({ key, value });
-                                setModalOpen(true);
-                              }}
-                            >
-                              <IconMaximize style={{ width: rem(16) }} />
-                            </ActionIcon>
-                          </Tooltip>
+                                <IconMaximize style={{ width: rem(16) }} />
+                              </ActionIcon>
+                            </Tooltip>
+                          </Group>
                         </Group>
-                      </Group>
-                      {renderMarkdown ? (
-                        <ReactMarkdown components={customRenderers}>{value}</ReactMarkdown>
-                      ) : (
                         <pre style={preStyles}>
-                          <Highlight highlight={searchTerms}>{value}</Highlight>
+                          <Highlight highlight={searchTerms}>{fieldValue}</Highlight>
                         </pre>
-                      )}
-                      {index < Object.entries(currentRecord).length - 1 && <Divider my="md" />}
-                    </React.Fragment>
-                  ))
+                        {index < getOriginalFields(currentRecord).length - 1 && <Divider my="md" />}
+                      </React.Fragment>
+                    ))}
+
+                    {/* Show structured fields as branches */}
+                    {getStructuredFields(currentRecord).length > 0 && (
+                      <>
+                        <Divider my="md" label="Structured Content" labelPosition="center" />
+                        <div style={{ paddingLeft: rem(20) }}>
+                          {getStructuredFields(currentRecord).map((field, index) => (
+                            <React.Fragment key={index}>
+                              <Group spacing="xs" mb="xs">
+                                <Group spacing={4}>
+                                  {/* Tree-like structure */}
+                                  <Text color="dimmed" size="sm">└─</Text>
+                                  <Badge 
+                                    color="pink"
+                                    variant="light"
+                                    style={{ cursor: 'pointer' }}
+                                    onClick={() => {
+                                      setSelectedRecord({ key: field.key, value: field.value });
+                                      setModalOpen(true);
+                                    }}
+                                  >
+                                    {field.key}
+                                  </Badge>
+                                </Group>
+                                <Group justify="xs">
+                                  <CopyButton value={field.value} timeout={2000}>
+                                    {({ copied, copy }) => (
+                                      <Tooltip label={copied ? 'Copied' : 'Copy'} withArrow position="right">
+                                        <ActionIcon color={copied ? 'teal' : 'gray'} variant="subtle" onClick={copy}>
+                                          {copied ? (
+                                            <IconCheck style={{ width: rem(16) }} />
+                                          ) : (
+                                            <IconCopy style={{ width: rem(16) }} />
+                                          )}
+                                        </ActionIcon>
+                                      </Tooltip>
+                                    )}
+                                  </CopyButton>
+                                  <Tooltip label="Expand" withArrow position="right">
+                                    <ActionIcon
+                                      color="blue"
+                                      variant="subtle"
+                                      onClick={() => {
+                                        setSelectedRecord({ key: field.key, value: field.value });
+                                        setModalOpen(true);
+                                      }}
+                                    >
+                                      <IconMaximize style={{ width: rem(16) }} />
+                                    </ActionIcon>
+                                  </Tooltip>
+                                </Group>
+                              </Group>
+                              <div style={{ paddingLeft: rem(35) }}>
+                                {renderMarkdown ? (
+                                  <ReactMarkdown components={customRenderers}>{field.value}</ReactMarkdown>
+                                ) : (
+                                  <pre style={preStyles}>
+                                    <Highlight highlight={searchTerms}>{field.value}</Highlight>
+                                  </pre>
+                                )}
+                              </div>
+                              {index < getStructuredFields(currentRecord).length - 1 && 
+                                <Divider my="md" variant="dashed" />}
+                            </React.Fragment>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </>
                 ) : (
                   <Text>No record found</Text>
                 )}
@@ -271,6 +457,7 @@ const LeadGrid: React.FC = () => {
             <AccordionStats />
           </Grid.Col>
         </Grid>
+
         <Modal
           opened={modalOpen}
           onClose={() => setModalOpen(false)}
@@ -278,11 +465,12 @@ const LeadGrid: React.FC = () => {
           title={selectedRecord?.key}
           size="lg"
         >
-          <ExpandedRecordModal
-            record={selectedRecord}
-            renderMarkdown={renderMarkdown}
-            searchTerms={searchTerms}
-          />
+          {selectedRecord && (
+            <InteractiveRecordModal
+              record={selectedRecord}
+              onApplySelections={handleApplySelections}
+            />
+          )}
         </Modal>
       </Container>
     </>
