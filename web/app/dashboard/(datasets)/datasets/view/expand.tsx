@@ -11,13 +11,13 @@ interface Selection {
 }
 
 interface InteractiveRecordModalProps {
-  record: { key: string; value: string } | null;
-  onApplySelections: (selections: Selection[]) => void; // <-- New prop
+  content: string;
+  onClose: () => void;
 }
 
 const InteractiveRecordModal: React.FC<InteractiveRecordModalProps> = ({
-  record,
-  onApplySelections,
+  content,
+  onClose,
 }) => {
   const [selections, setSelections] = useState<Selection[]>([]);
   const [currentSelection, setCurrentSelection] = useState<{
@@ -43,11 +43,11 @@ const InteractiveRecordModal: React.FC<InteractiveRecordModalProps> = ({
     const number = selections.length + 1;
     setSelections((prev) => [
       ...prev,
-      { 
-        type: 'key', 
-        number, 
-        text: currentSelection.text, 
-        range: currentSelection.range 
+      {
+        type: 'key',
+        number,
+        text: currentSelection.text,
+        range: currentSelection.range
       }
     ]);
     setCurrentSelection(null);
@@ -125,7 +125,7 @@ const InteractiveRecordModal: React.FC<InteractiveRecordModalProps> = ({
         onMouseUp={handleTextHighlight}
         onTouchEnd={handleTextHighlight}
       >
-        {record?.value}
+        {content}
       </div>
 
       {/* Simplified menu - only "Select as Key" option */}
@@ -155,8 +155,8 @@ const InteractiveRecordModal: React.FC<InteractiveRecordModalProps> = ({
         </Menu>
       )}
 
-      <Group position="right" mt="md">
-        <Button onClick={() => onApplySelections(selections)}>Apply</Button>
+      <Group justify="flex-end" mt="md">
+        <Button onClick={onClose}>Close</Button>
       </Group>
     </div>
   );

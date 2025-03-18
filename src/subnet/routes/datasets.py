@@ -243,23 +243,29 @@ async def get_dataset_records(
         )
 
     try:
-        df = pd.read_parquet(data_file)
-        total_records = len(df)  # Get the total number of records in the dataset
-        start = (page - 1) * page_size
-        end = start + page_size
+        with get_duckdb_connection() as conn:
+            # Get total count
+            total_records = conn.execute(
+                f"SELECT COUNT(*) FROM parquet_scan('{data_file}')"
+            ).fetchone()[0]
 
-        # Ensure the end index does not exceed the total number of records
-        if end > total_records:
-            end = total_records
+            # Calculate offset
+            offset = (page - 1) * page_size
 
-        return {
-            "split": split,
-            "total_records": total_records,  # Correct total record count
-            "page": page,
-            "page_size": page_size,
-            "records": df.iloc[start:end].to_dict(orient="records"),
-        }
+            # Fetch paginated records
+            records = conn.execute(
+                f"SELECT * FROM parquet_scan('{data_file}') LIMIT {page_size} OFFSET {offset}"
+            ).fetchdf()
+
+            return {
+                "split": split,
+                "total_records": total_records,
+                "page": page,
+                "page_size": page_size,
+                "records": records.to_dict(orient="records"),
+            }
     except Exception as e:
+        logger.error(f"Error reading dataset: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error reading dataset: {str(e)}")
 
 

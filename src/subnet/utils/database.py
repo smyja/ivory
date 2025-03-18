@@ -31,8 +31,8 @@ def create_db_engine():
                 SQLALCHEMY_DATABASE_URL,
                 echo=False,
                 pool_pre_ping=True,  # Enable connection health checks
-                pool_size=1,  # Use a single connection to prevent locking issues
-                max_overflow=0,  # No overflow connections
+                pool_size=5,  # Increase pool size to handle more concurrent connections
+                max_overflow=10,  # Allow overflow connections
                 pool_timeout=30,  # Timeout for getting a connection from the pool
                 pool_recycle=1800,  # Recycle connections after 30 minutes
             )
@@ -66,6 +66,9 @@ except Exception as e:
 
 active_downloads: Dict[int, Dict] = {}
 
+# Global DuckDB connection pool
+_duckdb_connections = []
+
 
 def get_db():
     """Get a database session."""
@@ -78,21 +81,30 @@ def get_db():
 
 @contextmanager
 def get_duckdb_connection():
-    """Get a DuckDB connection with proper cleanup."""
+    """Get a DuckDB connection from the pool with proper cleanup."""
     conn = None
     try:
-        conn = duckdb.connect(
-            "datasets.db",
-            read_only=False,  # Allow write operations
-            timeout=30,  # Add timeout to prevent hanging
-        )
+        # Try to reuse an existing connection
+        if _duckdb_connections:
+            conn = _duckdb_connections.pop()
+        else:
+            # Create a new connection if none available
+            conn = duckdb.connect(
+                "datasets.db",
+                read_only=False,  # Use write mode for all operations
+            )
         yield conn
     finally:
         if conn:
             try:
-                conn.close()
+                # Return the connection to the pool instead of closing it
+                _duckdb_connections.append(conn)
             except Exception as e:
-                logger.error(f"Error closing DuckDB connection: {str(e)}")
+                logger.error(f"Error managing DuckDB connection: {str(e)}")
+                try:
+                    conn.close()
+                except:
+                    pass
 
 
 BASE_API_URL = "https://datasets-server.huggingface.co/rows"

@@ -1,5 +1,6 @@
 'use client';
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
 import {
   Container,
   Grid,
@@ -17,6 +18,8 @@ import {
   CopyButton,
   Tooltip,
   Modal,
+  Title,
+  LoadingOverlay,
 } from '@mantine/core';
 import {
   IconCopy,
@@ -27,6 +30,8 @@ import {
   IconMaximize,
 } from '@tabler/icons-react';
 import ReactMarkdown from 'react-markdown';
+import { notifications } from '@mantine/notifications';
+import { useRouter } from 'next/navigation';
 
 import InteractiveRecordModal from './expand';
 import { AccordionStats } from './(components)/accordion';
@@ -46,16 +51,27 @@ interface ApiResponse {
   records: Record[];
 }
 
-// Our selection interface
-interface Selection {
-  type: 'key' | 'value';
-  number: number;
-  text: string;
-  range: Range;
+interface DatasetInfo {
+  id: number;
+  name: string;
+  subset: string | null;
+  split: string | null;
+  status: string;
+  splits: {
+    [key: string]: {
+      columns: string[];
+      row_count: number;
+      sample_rows: Record[];
+    };
+  };
 }
 
-const LeadGrid: React.FC = () => {
+const DatasetView: React.FC = () => {
   const theme = useMantineTheme();
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const datasetId = searchParams.get('id');
+
   const [renderMarkdown, setRenderMarkdown] = useState<boolean>(false);
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [totalRecords, setTotalRecords] = useState<number>(0);
@@ -66,53 +82,75 @@ const LeadGrid: React.FC = () => {
   const [searchTerms, setSearchTerms] = useState<string[]>([]);
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState<{ key: string; value: string } | null>(null);
+  const [datasetInfo, setDatasetInfo] = useState<DatasetInfo | null>(null);
 
   useEffect(() => {
-    fetchData();
-  }, []);
+    if (!datasetId) {
+      notifications.show({
+        title: 'Error',
+        message: 'No dataset ID provided',
+        color: 'red',
+      });
+      router.push('/dashboard/datasets');
+      return;
+    }
+    fetchDatasetInfo();
+  }, [datasetId]);
 
-  useEffect(() => {
-    filterRecords();
-  }, [searchTerms, allRecords]);
+  const fetchDatasetInfo = async () => {
+    try {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}`);
+      if (!response.ok) {
+        throw new Error('Failed to fetch dataset info');
+      }
+      const data = await response.json();
+      setDatasetInfo(data);
+      fetchData();
+    } catch (error) {
+      console.error('Error fetching dataset info:', error);
+      notifications.show({
+        title: 'Error',
+        message: 'Failed to fetch dataset information',
+        color: 'red',
+      });
+      setLoading(false);
+    }
+  };
 
   const fetchData = async () => {
+    if (!datasetId) return;
+
     setLoading(true);
     try {
-      let allFetchedRecords: Record[] = [];
-      let page = 1;
-      let total = 0;
-      const pageSize = 50;
-
-      while (true) {
-        const response = await fetch(
-          `http://127.0.0.1:8000/datasets/29/records?page=${page}&page_size=${pageSize}`
-        );
-        if (!response.ok) {
-          throw new Error('Network response was not ok');
-        }
-
-        const data: ApiResponse = await response.json();
-        total = data.total_records;
-
-        allFetchedRecords = [...allFetchedRecords, ...data.records];
-
-        if (allFetchedRecords.length >= total) {
-          break;
-        }
-        page += 1;
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}/records?page=${currentPage}&page_size=10`
+      );
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: 'Unknown error occurred' }));
+        throw new Error(errorData.detail || `HTTP error! Status: ${response.status}`);
       }
 
-      setAllRecords(allFetchedRecords);
-      setFilteredRecords(allFetchedRecords); // Start with the same as allRecords
-      setTotalRecords(total);
+      const data: ApiResponse = await response.json();
+      setAllRecords(data.records);
+      setFilteredRecords(data.records);
+      setTotalRecords(data.total_records);
       setError(null);
     } catch (error: any) {
-      setError('Failed to fetch data');
+      setError(error.message || 'Failed to fetch data');
       console.error('Error fetching data:', error);
+      notifications.show({
+        title: 'Error',
+        message: error.message || 'Failed to fetch dataset records',
+        color: 'red',
+      });
     } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    fetchData();
+  }, [currentPage]);
 
   const filterRecords = () => {
     if (searchTerms.length === 0) {
@@ -132,104 +170,6 @@ const LeadGrid: React.FC = () => {
     const terms = term.split(' ').filter((t) => t.trim() !== '');
     setSearchTerms(terms);
   };
-
-  /**
-   * Called by the InteractiveRecordModal after the user highlights text
-   * and chooses "Key" or "Value," then hits "Apply."
-   */
-  const handleApplySelections = (selections: Selection[]) => {
-    setModalOpen(false);
-    if (!selectedRecord) return;
-
-    // Get all key selections in order
-    const keys = selections
-      .filter(s => s.type === 'key')
-      .sort((a, b) => a.range.startOffset - b.range.startOffset);
-
-    if (keys.length === 0) return;
-
-    // Update both allRecords and filteredRecords
-    const updateRecords = (records: Record[]) => {
-      return records.map(record => {
-        // Only process records that have a chat field
-        if (!record.chat) {
-          return record;
-        }
-
-        const newRecord = { ...record };
-
-        // Remove any existing structured fields
-        Object.keys(newRecord).forEach(key => {
-          if (key.startsWith('structured_key_') || key.startsWith('structured_value_')) {
-            delete newRecord[key];
-          }
-        });
-
-        // Split the chat content by the selected keys
-        const chatContent = record.chat;
-        let structuredIndex = 1;
-
-        // Find all occurrences of each key
-        const allOccurrences: { key: string; index: number }[] = [];
-
-        // For each key type (e.g., "USER:", "A:")
-        keys.forEach(keySelection => {
-          let pos = 0;
-          const keyText = keySelection.text;
-
-          // Find all occurrences of this key
-          while (pos < chatContent.length) {
-            const index = chatContent.indexOf(keyText, pos);
-            if (index === -1) break;
-
-            allOccurrences.push({
-              key: keyText,
-              index: index
-            });
-            pos = index + keyText.length;
-          }
-        });
-
-        // Sort all occurrences by their position in the text
-        allOccurrences.sort((a, b) => a.index - b.index);
-
-        // Process each occurrence
-        allOccurrences.forEach((occurrence, index) => {
-          const startIndex = occurrence.index + occurrence.key.length;
-          const nextOccurrence = allOccurrences[index + 1];
-          const endIndex = nextOccurrence ? nextOccurrence.index : chatContent.length;
-
-          // Extract the value (everything between this key and the next)
-          const value = chatContent
-            .slice(startIndex, endIndex)
-            .trim();
-
-          // Add the structured fields
-          newRecord[`structured_key_${structuredIndex}`] = occurrence.key;
-          newRecord[`structured_value_${structuredIndex}`] = value;
-
-          structuredIndex++;
-        });
-
-        return newRecord;
-      });
-    };
-
-    setAllRecords(prev => {
-      const updated = updateRecords(prev);
-      console.log('All records updated:', updated);
-      return updated;
-    });
-
-    setFilteredRecords(prev => {
-      const updated = updateRecords(prev);
-      console.log('Filtered records updated:', updated);
-      return updated;
-    });
-  };
-
-  const currentRecord = filteredRecords[currentPage - 1] || null;
-  const totalPages = filteredRecords.length;
 
   const preStyles: React.CSSProperties = {
     fontFamily: 'inherit',
@@ -251,7 +191,6 @@ const LeadGrid: React.FC = () => {
     },
   };
 
-  // Add this helper function at component level
   const getStructuredFields = (record: Record) => {
     const fields: { key: string; value: string }[] = [];
     let index = 1;
@@ -267,44 +206,48 @@ const LeadGrid: React.FC = () => {
     return fields;
   };
 
-  // Helper to get non-structured fields
   const getOriginalFields = (record: Record) => {
-    return Object.entries(record).filter(([key]) => 
-      !key.startsWith('structured_key_') && 
+    return Object.entries(record).filter(([key]) =>
+      !key.startsWith('structured_key_') &&
       !key.startsWith('structured_value_')
     );
   };
 
   return (
-    <>
-      <Group mt={10} position="apart">
-        <SearchComponent onSearch={handleSearch} />
-        <Group spacing="xs">
-          <ActionIcon color="gray">
-            <IconChevronLeft size="1rem" />
-          </ActionIcon>
-          <Button variant="default">Filter</Button>
-          <SortButton />
+    <Container my="md" fluid>
+      <LoadingOverlay visible={loading} overlayProps={{ blur: 2 }} />
+      <Card shadow="sm" radius="md" withBorder mb="md">
+        <Group justify="space-between" mb="md">
+          <div>
+            <Title order={2}>{datasetInfo?.name || 'Loading...'}</Title>
+            <Text c="dimmed" size="sm">
+              {datasetInfo?.subset ? `Subset: ${datasetInfo.subset}` : 'No subset'} •{' '}
+              {datasetInfo?.split ? `Split: ${datasetInfo.split}` : 'No split'}
+            </Text>
+          </div>
+          <Button variant="light" onClick={() => router.push('/dashboard/datasets')}>
+            Back to Datasets
+          </Button>
         </Group>
-      </Group>
+      </Card>
 
-      <Container my="md" fluid>
-        <Grid gutter="md">
-          <Grid.Col span={{ base: 12, md: 8 }}>
-            <Card shadow="sm" radius="md" withBorder pb={50}>
-              <Card.Section
-                withBorder
-                inheritPadding
-                py="xs"
-                style={{ backgroundColor: 'lavenderblush' }}
-              >
-                <Group position="apart" align="center">
-                  <Text fw={300} size="sm">
-                    Dataset Record
-                  </Text>
+      <Grid gutter="md">
+        <Grid.Col span={{ base: 12, md: 8 }}>
+          <Card shadow="sm" radius="md" withBorder pb={50}>
+            <Card.Section
+              withBorder
+              inheritPadding
+              py="xs"
+              style={{ backgroundColor: 'lavenderblush' }}
+            >
+              <Group justify="space-between" align="center">
+                <Text fw={300} size="sm">
+                  Dataset Record
+                </Text>
+                <Group gap="xs">
                   <CustomPagination
                     currentPage={currentPage}
-                    totalPages={totalPages}
+                    totalPages={Math.ceil(totalRecords / 10)}
                     onPageChange={setCurrentPage}
                   />
                   <Switch
@@ -330,151 +273,145 @@ const LeadGrid: React.FC = () => {
                     }
                   />
                 </Group>
-              </Card.Section>
+              </Group>
+            </Card.Section>
 
-              <Card.Section inheritPadding mt="md">
-                {loading ? (
-                  <Text>Loading...</Text>
-                ) : error ? (
-                  <Text c="red">{error}</Text>
-                ) : currentRecord ? (
-                  <>
-                    {/* Show all original fields */}
-                    {getOriginalFields(currentRecord).map(([fieldKey, fieldValue], index) => (
-                      <React.Fragment key={fieldKey}>
-                        <Group p="apart" mb="xs">
-                          <Badge color={fieldKey === 'chat' ? 'blue' : 'gray'}>{fieldKey}</Badge>
-                          <Group justify="xs">
-                            <CopyButton value={fieldValue} timeout={2000}>
-                              {({ copied, copy }) => (
-                                <Tooltip label={copied ? 'Copied' : 'Copy'} withArrow position="right">
-                                  <ActionIcon color={copied ? 'teal' : 'gray'} variant="subtle" onClick={copy}>
-                                    {copied ? (
-                                      <IconCheck style={{ width: rem(16) }} />
-                                    ) : (
-                                      <IconCopy style={{ width: rem(16) }} />
-                                    )}
-                                  </ActionIcon>
-                                </Tooltip>
-                              )}
-                            </CopyButton>
-                            <Tooltip label="Expand" withArrow position="right">
-                              <ActionIcon
-                                color="blue"
-                                variant="subtle"
-                                onClick={() => {
-                                  setSelectedRecord({ key: fieldKey, value: fieldValue });
-                                  setModalOpen(true);
-                                }}
-                              >
-                                <IconMaximize style={{ width: rem(16) }} />
-                              </ActionIcon>
-                            </Tooltip>
-                          </Group>
+            <Card.Section inheritPadding mt="md">
+              {error ? (
+                <Text c="red">{error}</Text>
+              ) : filteredRecords.length > 0 ? (
+                <>
+                  {getOriginalFields(filteredRecords[0]).map(([fieldKey, fieldValue], index) => (
+                    <React.Fragment key={fieldKey}>
+                      <Group justify="space-between" mb="xs">
+                        <Badge color={fieldKey === 'chat' ? 'blue' : 'gray'}>{fieldKey}</Badge>
+                        <Group gap="xs">
+                          <CopyButton value={fieldValue} timeout={2000}>
+                            {({ copied, copy }) => (
+                              <Tooltip label={copied ? 'Copied' : 'Copy'} withArrow position="right">
+                                <ActionIcon color={copied ? 'teal' : 'gray'} variant="subtle" onClick={copy}>
+                                  {copied ? (
+                                    <IconCheck style={{ width: rem(16) }} />
+                                  ) : (
+                                    <IconCopy style={{ width: rem(16) }} />
+                                  )}
+                                </ActionIcon>
+                              </Tooltip>
+                            )}
+                          </CopyButton>
+                          <Tooltip label="Expand" withArrow position="right">
+                            <ActionIcon
+                              color="blue"
+                              variant="subtle"
+                              onClick={() => {
+                                setSelectedRecord({ key: fieldKey, value: fieldValue });
+                                setModalOpen(true);
+                              }}
+                            >
+                              <IconMaximize style={{ width: rem(16) }} />
+                            </ActionIcon>
+                          </Tooltip>
                         </Group>
-                        <pre style={preStyles}>
-                          <Highlight highlight={searchTerms}>{fieldValue}</Highlight>
-                        </pre>
-                        {index < getOriginalFields(currentRecord).length - 1 && <Divider my="md" />}
-                      </React.Fragment>
-                    ))}
+                      </Group>
+                      <pre style={preStyles}>
+                        <Highlight highlight={searchTerms}>{fieldValue}</Highlight>
+                      </pre>
+                      {index < getOriginalFields(filteredRecords[0]).length - 1 && <Divider my="md" />}
+                    </React.Fragment>
+                  ))}
 
-                    {/* Show structured fields as branches */}
-                    {getStructuredFields(currentRecord).length > 0 && (
-                      <>
-                        <Divider my="md" label="Structured Content" labelPosition="center" />
-                        <div style={{ paddingLeft: rem(20) }}>
-                          {getStructuredFields(currentRecord).map((field, index) => (
-                            <React.Fragment key={index}>
-                              <Group spacing="xs" mb="xs">
-                                <Group spacing={4}>
-                                  {/* Tree-like structure */}
-                                  <Text color="dimmed" size="sm">└─</Text>
-                                  <Badge 
-                                    color="pink"
-                                    variant="light"
-                                    style={{ cursor: 'pointer' }}
+                  {getStructuredFields(filteredRecords[0]).length > 0 && (
+                    <>
+                      <Divider my="md" label="Structured Content" labelPosition="center" />
+                      <div style={{ paddingLeft: rem(20) }}>
+                        {getStructuredFields(filteredRecords[0]).map((field, index) => (
+                          <React.Fragment key={index}>
+                            <Group gap="xs" mb="xs">
+                              <Group gap={4}>
+                                <Text color="dimmed" size="sm">└─</Text>
+                                <Badge
+                                  color="pink"
+                                  variant="light"
+                                  style={{ cursor: 'pointer' }}
+                                  onClick={() => {
+                                    setSelectedRecord({ key: field.key, value: field.value });
+                                    setModalOpen(true);
+                                  }}
+                                >
+                                  {field.key}
+                                </Badge>
+                              </Group>
+                              <Group gap="xs">
+                                <CopyButton value={field.value} timeout={2000}>
+                                  {({ copied, copy }) => (
+                                    <Tooltip label={copied ? 'Copied' : 'Copy'} withArrow position="right">
+                                      <ActionIcon color={copied ? 'teal' : 'gray'} variant="subtle" onClick={copy}>
+                                        {copied ? (
+                                          <IconCheck style={{ width: rem(16) }} />
+                                        ) : (
+                                          <IconCopy style={{ width: rem(16) }} />
+                                        )}
+                                      </ActionIcon>
+                                    </Tooltip>
+                                  )}
+                                </CopyButton>
+                                <Tooltip label="Expand" withArrow position="right">
+                                  <ActionIcon
+                                    color="blue"
+                                    variant="subtle"
                                     onClick={() => {
                                       setSelectedRecord({ key: field.key, value: field.value });
                                       setModalOpen(true);
                                     }}
                                   >
-                                    {field.key}
-                                  </Badge>
-                                </Group>
-                                <Group justify="xs">
-                                  <CopyButton value={field.value} timeout={2000}>
-                                    {({ copied, copy }) => (
-                                      <Tooltip label={copied ? 'Copied' : 'Copy'} withArrow position="right">
-                                        <ActionIcon color={copied ? 'teal' : 'gray'} variant="subtle" onClick={copy}>
-                                          {copied ? (
-                                            <IconCheck style={{ width: rem(16) }} />
-                                          ) : (
-                                            <IconCopy style={{ width: rem(16) }} />
-                                          )}
-                                        </ActionIcon>
-                                      </Tooltip>
-                                    )}
-                                  </CopyButton>
-                                  <Tooltip label="Expand" withArrow position="right">
-                                    <ActionIcon
-                                      color="blue"
-                                      variant="subtle"
-                                      onClick={() => {
-                                        setSelectedRecord({ key: field.key, value: field.value });
-                                        setModalOpen(true);
-                                      }}
-                                    >
-                                      <IconMaximize style={{ width: rem(16) }} />
-                                    </ActionIcon>
-                                  </Tooltip>
-                                </Group>
+                                    <IconMaximize style={{ width: rem(16) }} />
+                                  </ActionIcon>
+                                </Tooltip>
                               </Group>
-                              <div style={{ paddingLeft: rem(35) }}>
-                                {renderMarkdown ? (
-                                  <ReactMarkdown components={customRenderers}>{field.value}</ReactMarkdown>
-                                ) : (
-                                  <pre style={preStyles}>
-                                    <Highlight highlight={searchTerms}>{field.value}</Highlight>
-                                  </pre>
-                                )}
-                              </div>
-                              {index < getStructuredFields(currentRecord).length - 1 && 
-                                <Divider my="md" variant="dashed" />}
-                            </React.Fragment>
-                          ))}
-                        </div>
-                      </>
-                    )}
-                  </>
-                ) : (
-                  <Text>No record found</Text>
-                )}
-              </Card.Section>
-            </Card>
-          </Grid.Col>
-          <Grid.Col span={{ base: 12, md: 4 }}>
-            <AccordionStats />
-          </Grid.Col>
-        </Grid>
+                            </Group>
+                            <div style={{ paddingLeft: rem(35) }}>
+                              {renderMarkdown ? (
+                                <ReactMarkdown components={customRenderers}>{field.value}</ReactMarkdown>
+                              ) : (
+                                <pre style={preStyles}>
+                                  <Highlight highlight={searchTerms}>{field.value}</Highlight>
+                                </pre>
+                              )}
+                            </div>
+                            {index < getStructuredFields(filteredRecords[0]).length - 1 &&
+                              <Divider my="md" variant="dashed" />}
+                          </React.Fragment>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </>
+              ) : (
+                <Text>No records found</Text>
+              )}
+            </Card.Section>
+          </Card>
+        </Grid.Col>
+        <Grid.Col span={{ base: 12, md: 4 }}>
+          <AccordionStats />
+        </Grid.Col>
+      </Grid>
 
+      {selectedRecord && (
         <Modal
           opened={modalOpen}
           onClose={() => setModalOpen(false)}
-          centered
-          title={selectedRecord?.key}
-          size="lg"
+          size="xl"
+          title={selectedRecord.key}
         >
-          {selectedRecord && (
-            <InteractiveRecordModal
-              record={selectedRecord}
-              onApplySelections={handleApplySelections}
-            />
-          )}
+          <InteractiveRecordModal
+            content={selectedRecord.value}
+            onClose={() => setModalOpen(false)}
+          />
         </Modal>
-      </Container>
-    </>
+      )}
+    </Container>
   );
 };
 
-export default LeadGrid;
+export default DatasetView;
