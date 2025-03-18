@@ -1,7 +1,7 @@
 ### utils/database.py
 import os
 import requests
-from sqlalchemy import create_engine, MetaData
+from sqlalchemy import create_engine, MetaData, text
 from sqlalchemy.orm import sessionmaker, Session
 from models import Base, DatasetMetadata, DownloadStatus, DatasetRequest
 from datasets import load_dataset
@@ -9,19 +9,66 @@ import pandas as pd
 from typing import Dict
 from fastapi import HTTPException
 import logging
+import duckdb
+from contextlib import contextmanager
+import time
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Use a single DuckDB connection method
 SQLALCHEMY_DATABASE_URL = "duckdb:///datasets.db"
-engine = create_engine(SQLALCHEMY_DATABASE_URL, echo=False)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-metadata = MetaData()
-Base.metadata.create_all(bind=engine)
+
+
+def create_db_engine():
+    """Create a SQLAlchemy engine with retries for database initialization."""
+    max_retries = 3
+    retry_delay = 1  # seconds
+
+    for attempt in range(max_retries):
+        try:
+            engine = create_engine(
+                SQLALCHEMY_DATABASE_URL,
+                echo=False,
+                pool_pre_ping=True,  # Enable connection health checks
+                pool_size=1,  # Use a single connection to prevent locking issues
+                max_overflow=0,  # No overflow connections
+                pool_timeout=30,  # Timeout for getting a connection from the pool
+                pool_recycle=1800,  # Recycle connections after 30 minutes
+            )
+            # Test the connection
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))  # Use text() for raw SQL
+            return engine
+        except Exception as e:
+            if attempt < max_retries - 1:
+                logger.warning(
+                    f"Database connection attempt {attempt + 1} failed: {str(e)}"
+                )
+                time.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+            else:
+                logger.error(
+                    f"Failed to connect to database after {max_retries} attempts"
+                )
+                raise
+
+
+# Initialize the engine
+try:
+    engine = create_db_engine()
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    metadata = MetaData()
+    Base.metadata.create_all(bind=engine)
+except Exception as e:
+    logger.error(f"Failed to initialize database: {str(e)}")
+    raise
 
 active_downloads: Dict[int, Dict] = {}
 
+
 def get_db():
+    """Get a database session."""
     db = SessionLocal()
     try:
         yield db
@@ -29,9 +76,29 @@ def get_db():
         db.close()
 
 
+@contextmanager
+def get_duckdb_connection():
+    """Get a DuckDB connection with proper cleanup."""
+    conn = None
+    try:
+        conn = duckdb.connect(
+            "datasets.db",
+            read_only=False,  # Allow write operations
+            timeout=30,  # Add timeout to prevent hanging
+        )
+        yield conn
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception as e:
+                logger.error(f"Error closing DuckDB connection: {str(e)}")
+
+
 BASE_API_URL = "https://datasets-server.huggingface.co/rows"
 
 logger = logging.getLogger(__name__)
+
 
 def download_and_save_dataset(db: Session, request: DatasetRequest):
     new_metadata = None
@@ -40,7 +107,7 @@ def download_and_save_dataset(db: Session, request: DatasetRequest):
             name=request.dataset_name,
             subset=request.subset,
             split=request.split,
-            status=DownloadStatus.IN_PROGRESS
+            status=DownloadStatus.IN_PROGRESS,
         )
         db.add(new_metadata)
         db.commit()
@@ -48,27 +115,36 @@ def download_and_save_dataset(db: Session, request: DatasetRequest):
 
         if request.num_rows:
             # Use the API to download a specific number of rows
-            logger.info(f"Fetching {request.num_rows} rows via API for dataset: {request.dataset_name}")
+            logger.info(
+                f"Fetching {request.num_rows} rows via API for dataset: {request.dataset_name}"
+            )
 
             config_param = f"&config={request.config}" if request.config else ""
-            api_url = (f"https://datasets-server.huggingface.co/rows?"
-                       f"dataset={request.dataset_name}"
-                       f"{config_param}"
-                       f"&split={request.split}"
-                       f"&offset=0"
-                       f"&length={min(request.num_rows or 100, 100)}")
+            api_url = (
+                f"https://datasets-server.huggingface.co/rows?"
+                f"dataset={request.dataset_name}"
+                f"{config_param}"
+                f"&split={request.split}"
+                f"&offset=0"
+                f"&length={min(request.num_rows or 100, 100)}"
+            )
 
             logger.info(f"Fetching data from URL: {api_url}")
 
             response = requests.get(api_url)
             if response.status_code == 404:
-                raise HTTPException(status_code=404, detail=f"Resource not found: {response.text}")
+                raise HTTPException(
+                    status_code=404, detail=f"Resource not found: {response.text}"
+                )
             if response.status_code != 200:
-                raise HTTPException(status_code=response.status_code, detail=f"Error fetching dataset: {response.text}")
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"Error fetching dataset: {response.text}",
+                )
 
             api_data = response.json()
-            rows = api_data['rows']
-            data = [row['row'] for row in rows]
+            rows = api_data["rows"]
+            data = [row["row"] for row in rows]
             df = pd.DataFrame(data)
 
         else:
@@ -79,11 +155,13 @@ def download_and_save_dataset(db: Session, request: DatasetRequest):
                 request.dataset_name,
                 name=request.subset,
                 split=request.split,
-                cache_dir="temp_datasets"
+                cache_dir="temp_datasets",
             )
 
             if isinstance(dataset, dict):
-                df = pd.concat([split_dataset.to_pandas() for split_dataset in dataset.values()])
+                df = pd.concat(
+                    [split_dataset.to_pandas() for split_dataset in dataset.values()]
+                )
             else:
                 df = dataset.to_pandas()
 
@@ -120,11 +198,14 @@ def download_and_save_dataset(db: Session, request: DatasetRequest):
         # Clean up temporary files if any
         if os.path.exists("temp_datasets"):
             import shutil
+
             shutil.rmtree("temp_datasets")
 
 
 def verify_and_update_dataset_status(db: Session, dataset_id: int):
-    dataset_metadata = db.query(DatasetMetadata).filter(DatasetMetadata.id == dataset_id).first()
+    dataset_metadata = (
+        db.query(DatasetMetadata).filter(DatasetMetadata.id == dataset_id).first()
+    )
     if not dataset_metadata:
         logger.error(f"Dataset with id {dataset_id} not found in database")
         return False, "Dataset not found in database"
@@ -172,17 +253,20 @@ def verify_and_update_dataset_status(db: Session, dataset_id: int):
         logger.error(error_message)
         return False, error_message
 
+
 def get_active_downloads(db: Session):
-    active_downloads = db.query(DatasetMetadata).filter(
-        DatasetMetadata.status == DownloadStatus.IN_PROGRESS
-    ).all()
-    
+    active_downloads = (
+        db.query(DatasetMetadata)
+        .filter(DatasetMetadata.status == DownloadStatus.IN_PROGRESS)
+        .all()
+    )
+
     return [
         {
             "id": download.id,
             "dataset": download.name,
             "status": download.status.value,
-            "download_date": download.download_date
+            "download_date": download.download_date,
         }
         for download in active_downloads
     ]
