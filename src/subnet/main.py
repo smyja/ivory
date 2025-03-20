@@ -5,7 +5,6 @@ from contextlib import asynccontextmanager
 from fastapi.openapi.utils import get_openapi
 import logging
 from dotenv import load_dotenv
-from routes.api import router as api_router
 from routes.datasets import router as dataset_router
 
 # Load environment variables
@@ -46,8 +45,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(api_router)
-app.include_router(dataset_router, tags=["datasets"])
+# Include routers
+app.include_router(dataset_router, prefix="/datasets", tags=["datasets"])
 
 
 def custom_openapi():
@@ -55,15 +54,11 @@ def custom_openapi():
         return app.openapi_schema
 
     openapi_schema = get_openapi(
-        title=" Clustering and Dataset API",
+        title="Clustering and Dataset API",
         version="1.0.0",
         description="API for clustering questions, generating titles, and managing datasets",
         routes=app.routes,
     )
-
-    logger.info("Custom OpenAPI schema generation:")
-    for route in app.routes:
-        logger.info(f"Path: {route.path}, Methods: {route.methods}, Name: {route.name}")
 
     app.openapi_schema = openapi_schema
     return app.openapi_schema

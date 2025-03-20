@@ -94,7 +94,7 @@ export default function DatasetsPage() {
     notifications.show({
       title: 'Not implemented',
       message: 'Delete functionality coming soon',
-      color: 'yellow',
+      color: 'red',
     });
   };
 
@@ -233,7 +233,7 @@ export default function DatasetsPage() {
                           ? 'green'
                           : clusteringStatus[dataset.id] === 'failed'
                             ? 'red'
-                            : 'yellow'
+                            : 'black'
                       }
                     >
                       {clusteringStatus[dataset.id]}

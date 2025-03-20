@@ -32,7 +32,7 @@ import duckdb
 import numpy as np
 from sklearn.cluster import AgglomerativeClustering
 
-router = APIRouter(prefix="/datasets")
+router = APIRouter()
 logger = logging.getLogger(__name__)
 
 # Constants for clustering

@@ -22,7 +22,7 @@ export default function ClusteringHistoryPage() {
 
     const fetchHistory = async () => {
         try {
-            const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/clustering/history`);
+            const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/datasets/clustering/history`);
             if (!response.ok) {
                 throw new Error('Failed to fetch clustering history');
             }

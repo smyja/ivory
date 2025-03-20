@@ -62,7 +62,7 @@ export function ClusteringTable({ selectedStatus, history }: ClusteringTableProp
         return 'red';
       case 'queued':
       case 'not_started':
-        return 'yellow';
+        return 'black';
       default:
         return 'gray';
     }
