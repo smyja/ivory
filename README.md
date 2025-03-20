@@ -1,6 +1,6 @@
 # Ivory Project
 
-A full-stack application for question clustering and dataset management, built with Next.js and FastAPI.
+A full-stack application for clustering and dataset management, built with Next.js and FastAPI.
 
 ## Project Structure
 
@@ -12,7 +12,6 @@ The project is organized as a monorepo with two main components:
 ## Backend (src/subnet/)
 
 The backend is a FastAPI application that provides APIs for:
-- Question clustering
 - Dataset management
 - API endpoints for data processing
 

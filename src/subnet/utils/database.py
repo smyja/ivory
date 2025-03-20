@@ -4,7 +4,8 @@ import requests
 from sqlalchemy import create_engine, MetaData, text
 from sqlalchemy.orm import sessionmaker, Session
 from models import Base, DatasetMetadata, DownloadStatus, DatasetRequest
-from datasets import load_dataset
+from huggingface_hub import hf_hub_download
+from datasets import load_dataset as hf_load_dataset
 import pandas as pd
 from typing import Dict
 from fastapi import HTTPException
@@ -12,6 +13,7 @@ import logging
 import duckdb
 from contextlib import contextmanager
 import time
+from datetime import datetime
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -39,6 +41,7 @@ def create_db_engine():
             # Test the connection
             with engine.connect() as conn:
                 conn.execute(text("SELECT 1"))  # Use text() for raw SQL
+                conn.commit()
             return engine
         except Exception as e:
             if attempt < max_retries - 1:
@@ -54,12 +57,186 @@ def create_db_engine():
                 raise
 
 
+def get_active_downloads(db: Session):
+    active_downloads = (
+        db.query(DatasetMetadata)
+        .filter(DatasetMetadata.status == DownloadStatus.IN_PROGRESS)
+        .all()
+    )
+
+    return [
+        {
+            "id": download.id,
+            "dataset": download.name,
+            "status": download.status.value,
+            "download_date": download.download_date,
+        }
+        for download in active_downloads
+    ]
+
+
+def scan_existing_datasets(db: Session):
+    """Scan the datasets directory and recreate database entries for existing datasets."""
+    datasets_dir = "datasets"
+    if not os.path.exists(datasets_dir):
+        logger.warning("Datasets directory not found")
+        return
+
+    for dataset_name in os.listdir(datasets_dir):
+        dataset_path = os.path.join(datasets_dir, dataset_name)
+        if not os.path.isdir(dataset_path):
+            continue
+
+        # Check if dataset already exists in database
+        existing_dataset = (
+            db.query(DatasetMetadata)
+            .filter(DatasetMetadata.name == dataset_name)
+            .first()
+        )
+        if existing_dataset:
+            logger.info(f"Dataset {dataset_name} already exists in database")
+            continue
+
+        # Look for parquet files in the dataset directory
+        parquet_files = []
+        for root, _, files in os.walk(dataset_path):
+            for file in files:
+                if file.endswith(".parquet"):
+                    parquet_files.append(os.path.join(root, file))
+
+        if not parquet_files:
+            logger.warning(f"No parquet files found for dataset {dataset_name}")
+            continue
+
+        # Create new dataset entry
+        new_dataset = DatasetMetadata(
+            name=dataset_name,
+            status=DownloadStatus.COMPLETED,
+            download_date=datetime.fromtimestamp(os.path.getctime(parquet_files[0])),
+        )
+        db.add(new_dataset)
+        logger.info(f"Added dataset {dataset_name} to database")
+
+    db.commit()
+    logger.info("Finished scanning existing datasets")
+
+
+def init_db():
+    """Initialize the database with required tables."""
+    try:
+        conn = duckdb.connect("datasets.db")
+        cursor = conn.cursor()
+
+        # Create dataset_metadata table if it doesn't exist
+        cursor.execute(
+            """
+            CREATE SEQUENCE IF NOT EXISTS dataset_metadata_id_seq;
+            CREATE TABLE IF NOT EXISTS dataset_metadata (
+                id INTEGER PRIMARY KEY DEFAULT(nextval('dataset_metadata_id_seq')),
+                name VARCHAR NOT NULL,
+                subset VARCHAR,
+                split VARCHAR,
+                download_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_clustered BOOLEAN DEFAULT FALSE,
+                status VARCHAR DEFAULT 'pending',
+                clustering_status VARCHAR DEFAULT 'not_started'
+            );
+        """
+        )
+
+        # Create categories table if it doesn't exist
+        cursor.execute(
+            """
+            CREATE SEQUENCE IF NOT EXISTS categories_id_seq;
+            CREATE TABLE IF NOT EXISTS categories (
+                id INTEGER PRIMARY KEY DEFAULT(nextval('categories_id_seq')),
+                dataset_id INTEGER NOT NULL,
+                name VARCHAR NOT NULL,
+                total_rows INTEGER NOT NULL,
+                percentage DOUBLE NOT NULL,
+                FOREIGN KEY(dataset_id) REFERENCES dataset_metadata(id)
+            );
+        """
+        )
+
+        # Create subclusters table if it doesn't exist
+        cursor.execute(
+            """
+            CREATE SEQUENCE IF NOT EXISTS subclusters_id_seq;
+            CREATE TABLE IF NOT EXISTS subclusters (
+                id INTEGER PRIMARY KEY DEFAULT(nextval('subclusters_id_seq')),
+                category_id INTEGER NOT NULL,
+                title VARCHAR NOT NULL,
+                row_count INTEGER NOT NULL,
+                percentage DOUBLE NOT NULL,
+                FOREIGN KEY(category_id) REFERENCES categories(id)
+            );
+        """
+        )
+
+        # Create texts table if it doesn't exist
+        cursor.execute(
+            """
+            CREATE SEQUENCE IF NOT EXISTS texts_id_seq;
+            CREATE TABLE IF NOT EXISTS texts (
+                id INTEGER PRIMARY KEY DEFAULT(nextval('texts_id_seq')),
+                text VARCHAR NOT NULL
+            );
+        """
+        )
+
+        # Create text_clusters table if it doesn't exist
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS text_clusters (
+                text_id INTEGER,
+                subcluster_id INTEGER,
+                membership_score DOUBLE NOT NULL,
+                PRIMARY KEY (text_id, subcluster_id),
+                FOREIGN KEY(text_id) REFERENCES texts(id),
+                FOREIGN KEY(subcluster_id) REFERENCES subclusters(id)
+            );
+        """
+        )
+
+        # Create clustering_history table if it doesn't exist
+        cursor.execute(
+            """
+            CREATE SEQUENCE IF NOT EXISTS clustering_history_id_seq;
+            CREATE TABLE IF NOT EXISTS clustering_history (
+                id INTEGER PRIMARY KEY DEFAULT(nextval('clustering_history_id_seq')),
+                dataset_id INTEGER,
+                clustering_status VARCHAR NOT NULL,
+                titling_status VARCHAR NOT NULL,
+                created_at TIMESTAMP NOT NULL,
+                completed_at TIMESTAMP,
+                error_message VARCHAR,
+                FOREIGN KEY(dataset_id) REFERENCES dataset_metadata(id)
+            );
+        """
+        )
+
+        conn.commit()
+        conn.close()
+        logger.info("Database initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {str(e)}")
+        raise
+
+
 # Initialize the engine
 try:
     engine = create_db_engine()
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     metadata = MetaData()
+
+    # Create all tables
     Base.metadata.create_all(bind=engine)
+
+    # Scan for existing datasets and recreate database entries
+    with SessionLocal() as db:
+        scan_existing_datasets(db)
+
 except Exception as e:
     logger.error(f"Failed to initialize database: {str(e)}")
     raise
@@ -163,7 +340,7 @@ def download_and_save_dataset(db: Session, request: DatasetRequest):
             # Use the HF library to download the entire dataset
             logger.info(f"Loading full dataset directly: {request.dataset_name}")
 
-            dataset = load_dataset(
+            dataset = hf_load_dataset(
                 request.dataset_name,
                 name=request.subset,
                 split=request.split,
@@ -264,21 +441,3 @@ def verify_and_update_dataset_status(db: Session, dataset_id: int):
         error_message = f"Error verifying dataset: {str(e)}"
         logger.error(error_message)
         return False, error_message
-
-
-def get_active_downloads(db: Session):
-    active_downloads = (
-        db.query(DatasetMetadata)
-        .filter(DatasetMetadata.status == DownloadStatus.IN_PROGRESS)
-        .all()
-    )
-
-    return [
-        {
-            "id": download.id,
-            "dataset": download.name,
-            "status": download.status.value,
-            "download_date": download.download_date,
-        }
-        for download in active_downloads
-    ]

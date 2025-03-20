@@ -13,9 +13,10 @@ import {
   ActionIcon,
   Tooltip,
   rem,
+  Alert,
 } from '@mantine/core';
 import { useRouter } from 'next/navigation';
-import { IconEye, IconTrash, IconRefresh } from '@tabler/icons-react';
+import { IconEye, IconTrash, IconRefresh, IconPlus } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
@@ -27,11 +28,15 @@ interface Dataset {
   split: string | null;
   status: string;
   download_date: string;
+  clustering_status?: string;
 }
 
 export default function DatasetsPage() {
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [actionLoading, setActionLoading] = useState<number | null>(null);
+  const [clusteringStatus, setClusteringStatus] = useState<Record<number, string>>({});
   const router = useRouter();
 
   const fetchDatasets = async () => {
@@ -93,6 +98,63 @@ export default function DatasetsPage() {
     });
   };
 
+  const handleCluster = async (datasetId: number) => {
+    setActionLoading(datasetId);
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}/cluster`,
+        {
+          method: 'POST',
+        }
+      );
+      if (!response.ok) {
+        throw new Error('Failed to start clustering');
+      }
+      notifications.show({
+        title: 'Success',
+        message: 'Clustering started successfully',
+        color: 'green',
+      });
+      // Start polling for clustering status
+      pollClusteringStatus(datasetId);
+    } catch (error: any) {
+      notifications.show({
+        title: 'Error',
+        message: error.message || 'Failed to start clustering',
+        color: 'red',
+      });
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const pollClusteringStatus = async (datasetId: number) => {
+    const pollInterval = setInterval(async () => {
+      try {
+        const response = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}/clustering_status`
+        );
+        if (!response.ok) {
+          throw new Error('Failed to fetch clustering status');
+        }
+        const data = await response.json();
+        setClusteringStatus(prev => ({
+          ...prev,
+          [datasetId]: data.status,
+        }));
+        if (data.status === 'completed' || data.status === 'failed') {
+          clearInterval(pollInterval);
+        }
+      } catch (error) {
+        console.error('Error polling clustering status:', error);
+        clearInterval(pollInterval);
+      }
+    }, 2000); // Poll every 2 seconds
+
+    // Clean up interval after 5 minutes
+    setTimeout(() => clearInterval(pollInterval), 300000);
+  };
+
   const getStatusColor = (status: string) => {
     switch (status.toLowerCase()) {
       case 'completed':
@@ -126,6 +188,12 @@ export default function DatasetsPage() {
           </Button>
         </Group>
 
+        {error && (
+          <Alert color="red" className="mb-4">
+            {error}
+          </Alert>
+        )}
+
         <Table highlightOnHover>
           <Table.Thead>
             <Table.Tr>
@@ -133,6 +201,7 @@ export default function DatasetsPage() {
               <Table.Th>Subset</Table.Th>
               <Table.Th>Split</Table.Th>
               <Table.Th>Status</Table.Th>
+              <Table.Th>Clustering Status</Table.Th>
               <Table.Th>Download Date</Table.Th>
               <Table.Th>Actions</Table.Th>
             </Table.Tr>
@@ -157,6 +226,21 @@ export default function DatasetsPage() {
                   </Badge>
                 </Table.Td>
                 <Table.Td>
+                  {clusteringStatus[dataset.id] && (
+                    <Badge
+                      color={
+                        clusteringStatus[dataset.id] === 'completed'
+                          ? 'green'
+                          : clusteringStatus[dataset.id] === 'failed'
+                            ? 'red'
+                            : 'yellow'
+                      }
+                    >
+                      {clusteringStatus[dataset.id]}
+                    </Badge>
+                  )}
+                </Table.Td>
+                <Table.Td>
                   <Text size="sm">{formatDate(dataset.download_date)}</Text>
                 </Table.Td>
                 <Table.Td>
@@ -179,11 +263,22 @@ export default function DatasetsPage() {
                         <IconRefresh style={{ width: rem(16), height: rem(16) }} />
                       </ActionIcon>
                     </Tooltip>
+                    <Tooltip label="Cluster Dataset">
+                      <ActionIcon
+                        variant="light"
+                        color="blue"
+                        onClick={() => handleCluster(dataset.id)}
+                        loading={actionLoading === dataset.id}
+                      >
+                        <IconPlus style={{ width: rem(16), height: rem(16) }} />
+                      </ActionIcon>
+                    </Tooltip>
                     <Tooltip label="Delete Dataset">
                       <ActionIcon
                         variant="light"
                         color="red"
                         onClick={() => handleDelete(dataset.id)}
+                        loading={actionLoading === dataset.id}
                       >
                         <IconTrash style={{ width: rem(16), height: rem(16) }} />
                       </ActionIcon>

@@ -225,9 +225,18 @@ const DatasetView: React.FC = () => {
               {datasetInfo?.split ? `Split: ${datasetInfo.split}` : 'No split'}
             </Text>
           </div>
-          <Button variant="light" onClick={() => router.push('/dashboard/datasets')}>
-            Back to Datasets
-          </Button>
+          <Group>
+            <Button
+              variant="light"
+              color="blue"
+              onClick={() => router.push(`/dashboard/datasets/cluster?id=${datasetId}`)}
+            >
+              View Clusters
+            </Button>
+            <Button variant="light" onClick={() => router.push('/dashboard/datasets')}>
+              Back to Datasets
+            </Button>
+          </Group>
         </Group>
       </Card>
 

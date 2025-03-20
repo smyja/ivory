@@ -1,15 +1,14 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from typing import List, Dict
 from models import (
-    QuestionList,
+    TextDB,
     CategoryResponse,
     SubclusterResponse,
     Category,
     Subcluster,
-    QuestionDB,
-    QuestionCluster,
+    TextCluster,
 )
-from utils.clustering import process_questions
+from utils.clustering import cluster_texts
 from utils.database import get_db
 from sqlalchemy.orm import Session
 import logging
@@ -19,17 +18,18 @@ logger = logging.getLogger(__name__)
 
 
 @router.post("/cluster", response_model=Dict[str, List])
-async def cluster_questions(
-    question_list: QuestionList,
+async def cluster_texts_endpoint(
+    texts: List[str],
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
+    dataset_id: int = 0,  # Use 0 as a default for standalone clustering
 ):
     """
-    Cluster questions into hierarchical categories and subclusters.
+    Cluster texts into hierarchical categories and subclusters.
     Returns both categories and their subclusters.
     """
     try:
-        categories, subclusters = await process_questions(question_list.questions, db)
+        categories, subclusters = await cluster_texts(texts, db, dataset_id)
         return {
             "categories": [CategoryResponse.model_validate(cat) for cat in categories],
             "subclusters": [
@@ -72,9 +72,9 @@ async def list_subclusters(category_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/subclusters/{subcluster_id}/questions")
-async def list_subcluster_questions(subcluster_id: int, db: Session = Depends(get_db)):
-    """List all questions in a specific subcluster."""
+@router.get("/subclusters/{subcluster_id}/texts")
+async def list_subcluster_texts(subcluster_id: int, db: Session = Depends(get_db)):
+    """List all texts in a specific subcluster."""
     try:
         subcluster = db.query(Subcluster).filter(Subcluster.id == subcluster_id).first()
         if not subcluster:
@@ -82,27 +82,26 @@ async def list_subcluster_questions(subcluster_id: int, db: Session = Depends(ge
                 status_code=404, detail=f"Subcluster {subcluster_id} not found"
             )
 
-        # Query questions with their membership scores
-        questions_with_scores = (
-            db.query(QuestionDB, QuestionCluster.membership_score)
-            .join(QuestionCluster, QuestionDB.id == QuestionCluster.question_id)
-            .filter(QuestionCluster.subcluster_id == subcluster_id)
-            .order_by(QuestionCluster.membership_score.desc())
+        # Query texts with their membership scores
+        texts_with_scores = (
+            db.query(TextDB, TextCluster.membership_score)
+            .join(TextCluster, TextDB.id == TextCluster.text_id)
+            .filter(TextCluster.subcluster_id == subcluster_id)
+            .order_by(TextCluster.membership_score.desc())
             .all()
         )
 
         return {
             "subcluster": SubclusterResponse.model_validate(subcluster),
-            "questions": [
+            "texts": [
                 {
-                    "id": q.id,
-                    "question": q.question,
-                    "answer": q.answer,
+                    "id": t.id,
+                    "text": t.text,
                     "membership_score": score,
                 }
-                for q, score in questions_with_scores
+                for t, score in texts_with_scores
             ],
         }
     except Exception as e:
-        logger.exception(f"Error listing questions: {str(e)}")
+        logger.exception(f"Error listing texts: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

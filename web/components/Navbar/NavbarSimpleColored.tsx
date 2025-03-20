@@ -28,7 +28,7 @@ const data = [
     links: [
       { link: '/dashboard/datasets', label: 'Datasets' },
       { link: '/dashboard/datasets/create', label: 'Create Dataset' },
-      { link: '/dashboard/datasets/view', label: 'Dataset Explorer' },
+      { link: '/dashboard/datasets/cluster/history', label: 'Clustering History' },
       { link: '/dashboard/datasets/cluster', label: 'Cluster' },
     ],
   },
@@ -74,11 +74,10 @@ export function NavbarSimpleColored() {
               <Box key={item.label} className={classes.collapsibleLink}>
                 <UnstyledButton
                   onClick={() => setOpenGroup((prev) => (prev === item.label ? '' : item.label))}
-                  className={`${classes.control} ${
-                    active === item.label || item.links.some((subLink) => pathname === subLink.link)
+                  className={`${classes.control} ${active === item.label || item.links.some((subLink) => pathname === subLink.link)
                       ? classes.active
                       : ''
-                  }`}
+                    }`}
                 >
                   <Group justify="space-between">
                     <Box style={{ display: 'flex', alignItems: 'center' }}>
@@ -104,9 +103,8 @@ export function NavbarSimpleColored() {
                         onClick={() => handleLinkClick(subLink)}
                       >
                         <div
-                          className={`${classes.link} ${
-                            pathname === subLink.link ? classes.active : ''
-                          }`}
+                          className={`${classes.link} ${pathname === subLink.link ? classes.active : ''
+                            }`}
                         >
                           {subLink.label}
                         </div>
@@ -118,12 +116,12 @@ export function NavbarSimpleColored() {
             );
           } else {
             return (
-                  <Link href={item.link} key={item.label} onClick={() => handleLinkClick(item)}>
-                    <div className={`${classes.link} ${active === item.label ? classes.active : ''}`}>
-                      <item.icon className={classes.linkIcon} stroke={1.5} />
-                      <span>{item.label}</span>
-                    </div>
-                  </Link>
+              <Link href={item.link} key={item.label} onClick={() => handleLinkClick(item)}>
+                <div className={`${classes.link} ${active === item.label ? classes.active : ''}`}>
+                  <item.icon className={classes.linkIcon} stroke={1.5} />
+                  <span>{item.label}</span>
+                </div>
+              </Link>
             );
           }
         })}

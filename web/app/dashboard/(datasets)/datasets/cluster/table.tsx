@@ -1,59 +1,26 @@
+'use client';
+
 import React, { useState } from 'react';
-import { Table, Anchor, Box, Button, Text, Pagination } from '@mantine/core';
+import { Table, Anchor, Box, Button, Text, Pagination, Group, Badge, Select } from '@mantine/core';
 import { IconExternalLink } from '@tabler/icons-react';
-import IndicatorBadge from './indicator'; // Adjust the import path for IndicatorBadge
+import { useRouter } from 'next/navigation';
+import IndicatorBadge from './indicator';
+
+interface ClusteringHistory {
+  id: number;
+  dataset_id: number;
+  dataset_name: string;
+  clustering_status: 'queued' | 'processing' | 'completed' | 'failed';
+  titling_status: 'not_started' | 'in_progress' | 'completed' | 'failed';
+  created_at: string;
+  completed_at: string | null;
+  error_message?: string;
+}
 
 interface ClusteringTableProps {
   selectedStatus: string | null;
+  history: ClusteringHistory[];
 }
-
-const data = [
-  // Your data here
-  {
-    id: 1,
-    clusterName: 'Customer Segmentation',
-    status: 'Completed',
-    timeCompleted: '2023-09-05T14:30:00',
-  },
-  {
-    id: 2,
-    clusterName: 'Product Categories',
-    status: 'Processing',
-    timeCompleted: null,
-  },
-  {
-    id: 3,
-    clusterName: 'User Behavior',
-    status: 'Failed',
-    timeCompleted: '2023-09-04T09:15:00',
-  },
-  {
-    id: 4,
-    clusterName: 'Text Classification',
-    status: 'Completed',
-    timeCompleted: '2023-09-03T22:45:00',
-  },
-  {
-    id: 5,
-    clusterName: 'Image Segmentation',
-    status: 'Queued',
-    timeCompleted: null,
-  },
-  {
-    id: 6,
-    clusterName: 'Text Classification',
-    status: 'Completed',
-    timeCompleted: '2023-09-03T22:45:00',
-  },
-  {
-    id: 5,
-    clusterName: 'Image Segmentation',
-    status: 'Queued',
-    timeCompleted: null,
-  },
- 
- 
-];
 
 function formatDate(dateString: string | null) {
   if (!dateString) return '-';
@@ -67,91 +34,124 @@ function formatDate(dateString: string | null) {
   });
 }
 
-export function ClusteringTable({ selectedStatus }: ClusteringTableProps) {
+export function ClusteringTable({ selectedStatus, history }: ClusteringTableProps) {
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 5;
+  const [statusFilter, setStatusFilter] = useState<string | null>(selectedStatus);
+  const itemsPerPage = 10;
+  const router = useRouter();
 
   // Filter the data based on the selected status
-  const filteredData = selectedStatus
-    ? data.filter((row) => row.status === selectedStatus)
-    : data;
+  const filteredData = statusFilter
+    ? history.filter((row) => row.clustering_status === statusFilter)
+    : history;
 
   // Paginate the data
-  const paginatedData = filteredData.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+  const paginatedData = filteredData.slice(
+    (currentPage - 1) * itemsPerPage,
+    currentPage * itemsPerPage
+  );
 
-  const rows = paginatedData.map((row, index) => {
-    const statusColor =
-      row.status === 'Completed'
-        ? 'green'
-        : row.status === 'Processing'
-        ? 'blue'
-        : row.status === 'Failed'
-        ? 'red'
-        : 'yellow';
+  const getStatusColor = (status: string) => {
+    switch (status.toLowerCase()) {
+      case 'completed':
+        return 'green';
+      case 'processing':
+      case 'in_progress':
+        return 'blue';
+      case 'failed':
+        return 'red';
+      case 'queued':
+      case 'not_started':
+        return 'yellow';
+      default:
+        return 'gray';
+    }
+  };
 
-    return (
-      <Table.Tr key={row.id} style={index === paginatedData.length - 1 ? { borderRadius: '0 0 8px 8px' } : {}}>
-        <Table.Td style={{ width: '20%' }}>
+  const rows = paginatedData.map((row) => (
+    <Table.Tr key={row.id}>
+      <Table.Td>
+        <Anchor component="button" size="sm" onClick={() => router.push(`/dashboard/datasets/view?id=${row.dataset_id}`)}>
+          {row.dataset_name}
+        </Anchor>
+      </Table.Td>
+      <Table.Td>
+        <Group gap="xs">
           <IndicatorBadge
-            color={statusColor}
-            label={row.status}
-            processing={row.status === 'Processing'}
-            textColor={statusColor}
+            color={getStatusColor(row.clustering_status)}
+            label={row.clustering_status}
+            processing={row.clustering_status === 'processing'}
           />
-        </Table.Td>
-        <Table.Td style={{ width: '30%', paddingLeft: '10px' }}>
-          <Anchor component="button" size="sm">
-            {row.clusterName}
-          </Anchor>
-        </Table.Td>
-        <Table.Td style={{ width: '30%', paddingLeft: '0px' }}>{formatDate(row.timeCompleted)}</Table.Td>
-        <Table.Td style={{ width: '5%' }}>{row.id}</Table.Td>
-        <Table.Td style={{ width: '15%', textAlign: 'right' }}>
-          <Button
-            variant="light"
-            size="xs"
-            rightSection={<IconExternalLink size={14} />}
-            onClick={() => {
-              console.log(`View clusters for ${row.clusterName}`);
-            }}
-          >
-            View
-          </Button>
-        </Table.Td>
-      </Table.Tr>
-    );
-  });
+          {row.error_message && (
+            <Badge color="red" variant="dot" title={row.error_message}>
+              Error
+            </Badge>
+          )}
+        </Group>
+      </Table.Td>
+      <Table.Td>
+        <IndicatorBadge
+          color={getStatusColor(row.titling_status)}
+          label={row.titling_status}
+          processing={row.titling_status === 'in_progress'}
+        />
+      </Table.Td>
+      <Table.Td>{formatDate(row.created_at)}</Table.Td>
+      <Table.Td>{formatDate(row.completed_at)}</Table.Td>
+      <Table.Td>
+        <Button
+          variant="light"
+          size="xs"
+          rightSection={<IconExternalLink size={14} />}
+          onClick={() => router.push(`/dashboard/datasets/cluster?id=${row.dataset_id}`)}
+          disabled={row.clustering_status !== 'completed'}
+        >
+          View Results
+        </Button>
+      </Table.Td>
+    </Table.Tr>
+  ));
 
   return (
-    <>
-      <Box style={{ display: 'grid', gridTemplateColumns: '20% 30% 30% 10% 10%', padding: '0 16px', marginBottom: '6px' }}>
-        <Text fw={500} size="sm" style={{ textAlign: 'left' }}>
-          Status
-        </Text>
-        <Text fw={500} size="sm" style={{ textAlign: 'left' }}>
-          Cluster Name
-        </Text>
-        <Text fw={500} size="sm" style={{ textAlign: 'left' }}>
-          Time Completed
-        </Text>
-        <Text fw={500} size="sm" style={{ textAlign: 'left' }}>
-          ID
-        </Text>
-        <Text fw={500} size="sm" style={{ textAlign: 'right' }}>
-          View Clusters
-        </Text>
-      </Box>
+    <Box>
+      <Group justify="space-between" mb="md">
+        <Select
+          label="Filter by status"
+          placeholder="All statuses"
+          value={statusFilter}
+          onChange={setStatusFilter}
+          data={[
+            { value: 'queued', label: 'Queued' },
+            { value: 'processing', label: 'Processing' },
+            { value: 'completed', label: 'Completed' },
+            { value: 'failed', label: 'Failed' },
+          ]}
+          clearable
+        />
+      </Group>
+
       <Box style={{ borderRadius: '8px', overflow: 'hidden', border: '1px solid #ddd' }}>
-        <Table verticalSpacing="xs" highlightOnHover style={{backgroundColor:"white"}}>
+        <Table verticalSpacing="xs" highlightOnHover style={{ backgroundColor: "white" }}>
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th>Dataset</Table.Th>
+              <Table.Th>Clustering Status</Table.Th>
+              <Table.Th>Titling Status</Table.Th>
+              <Table.Th>Started At</Table.Th>
+              <Table.Th>Completed At</Table.Th>
+              <Table.Th>Actions</Table.Th>
+            </Table.Tr>
+          </Table.Thead>
           <Table.Tbody>{rows}</Table.Tbody>
         </Table>
+
         <Box
           style={{
-            backgroundColor: '#f5f5f5', // Gray background color
+            backgroundColor: '#f5f5f5',
             padding: '10px',
             display: 'flex',
             justifyContent: 'center',
-            borderTop: '1px solid #ddd', // Border between table and footer
+            borderTop: '1px solid #ddd',
           }}
         >
           <Pagination
@@ -162,6 +162,6 @@ export function ClusteringTable({ selectedStatus }: ClusteringTableProps) {
           />
         </Box>
       </Box>
-    </>
+    </Box>
   );
 }
