@@ -4,17 +4,25 @@ from models import (
     Category,
     Subcluster,
     TextCluster,
+    DatasetMetadata,
 )
 from utils.vectorizer import vectorize_texts
-from utils.titling import generate_semantic_title, derive_overarching_category
+from utils.titling import (
+    generate_semantic_title,
+    derive_overarching_category,
+)
 import hdbscan
 import numpy as np
 import logging
 import asyncio
 from sqlalchemy.orm import Session
-from sklearn.cluster import KMeans
+from sklearn.cluster import KMeans, AgglomerativeClustering
+from utils.database import get_duckdb_connection
 
 logger = logging.getLogger(__name__)
+
+# Constants
+DISTANCE_THRESHOLD = 0.5  # Adjust this value to control cluster granularity
 
 
 async def cluster_texts(
@@ -25,109 +33,233 @@ async def cluster_texts(
     Returns both categories and their subclusters.
     """
     try:
-        # Convert texts to TextDB objects and add to database
-        text_objects = [TextDB(text=text) for text in texts]
-        db.add_all(text_objects)
-        db.flush()  # Get IDs for the new texts
+        # Clean up existing data for this dataset
+        with get_duckdb_connection() as cleanup_conn:
+            # First delete text_clusters entries
+            cleanup_conn.execute(
+                """
+                DELETE FROM text_clusters tc
+                WHERE tc.subcluster_id IN (
+                    SELECT s.id 
+                    FROM subclusters s
+                    JOIN categories c ON s.category_id = c.id
+                    WHERE c.dataset_id = ?
+                )
+                """,
+                [dataset_id],
+            )
+            # Then delete subclusters
+            cleanup_conn.execute(
+                """
+                DELETE FROM subclusters 
+                WHERE category_id IN (
+                    SELECT id 
+                    FROM categories 
+                    WHERE dataset_id = ?
+                )
+                """,
+                [dataset_id],
+            )
+            # Then delete categories
+            cleanup_conn.execute(
+                """
+                DELETE FROM categories 
+                WHERE dataset_id = ?
+                """,
+                [dataset_id],
+            )
+            # Finally delete texts
+            cleanup_conn.execute(
+                """
+                DELETE FROM texts
+                WHERE id IN (
+                    SELECT tc.text_id
+                    FROM text_clusters tc
+                    JOIN subclusters s ON tc.subcluster_id = s.id
+                    JOIN categories c ON s.category_id = c.id
+                    WHERE c.dataset_id = ?
+                )
+                """,
+                [dataset_id],
+            )
 
-        # Vectorize texts for clustering
-        vectors = await vectorize_texts(texts)
+        # Insert texts into the database
+        with get_duckdb_connection() as insert_conn:
+            # First check if dataset_id column exists
+            columns = insert_conn.execute("DESCRIBE texts").fetchall()
+            column_names = [col[0] for col in columns]
+
+            if "dataset_id" in column_names:
+                # If column exists, use it
+                for text in texts:
+                    insert_conn.execute(
+                        """
+                        INSERT INTO texts (text, dataset_id)
+                        VALUES (?, ?)
+                        """,
+                        [text, dataset_id],
+                    )
+            else:
+                # If column doesn't exist, add it first
+                insert_conn.execute("ALTER TABLE texts ADD COLUMN dataset_id INTEGER")
+                # Then insert the data
+                for text in texts:
+                    insert_conn.execute(
+                        """
+                        INSERT INTO texts (text, dataset_id)
+                        VALUES (?, ?)
+                        """,
+                        [text, dataset_id],
+                    )
+
+        # Get embeddings for all texts
+        embeddings = await vectorize_texts(texts)
 
         # Perform clustering
-        n_clusters = min(5, len(texts))  # Limit to 5 clusters or less
-        kmeans = KMeans(n_clusters=n_clusters, random_state=42)
-        cluster_labels = kmeans.fit_predict(vectors)
+        clustering = AgglomerativeClustering(
+            n_clusters=None,
+            distance_threshold=DISTANCE_THRESHOLD,
+            metric="cosine",
+            linkage="complete",
+        )
+        clusters = clustering.fit_predict(embeddings)
 
-        # Create categories and subclusters
-        categories = []
-        subclusters = []
+        # Get unique clusters
+        unique_clusters = np.unique(clusters)
         total_texts = len(texts)
 
-        # Dictionary to store cluster title mappings
-        cluster_titles = {}
-
-        # First generate all subcluster titles
-        for cluster_idx in range(n_clusters):
+        # Process each cluster
+        for cluster_id in unique_clusters:
             # Get texts in this cluster
-            cluster_texts_data = [
-                text
-                for text, label in zip(texts, cluster_labels)
-                if label == cluster_idx
+            cluster_texts = [
+                text for i, text in enumerate(texts) if clusters[i] == cluster_id
+            ]
+            cluster_embeddings = [
+                emb for i, emb in enumerate(embeddings) if clusters[i] == cluster_id
             ]
 
-            if not cluster_texts_data:
+            # Generate category name and create category first
+            category_name = await derive_overarching_category(cluster_texts)
+            with get_duckdb_connection() as category_conn:
+                category_conn.execute(
+                    """
+                    INSERT INTO categories (dataset_id, name, total_rows, percentage)
+                    VALUES (?, ?, ?, ?)
+                    RETURNING id
+                    """,
+                    [
+                        dataset_id,
+                        category_name,
+                        len(cluster_texts),
+                        len(cluster_texts) / total_texts * 100,
+                    ],
+                )
+                category_id = category_conn.fetchone()[0]
+
+            # Skip subclustering if there's only one text
+            if len(cluster_texts) < 2:
+                # Create a single subcluster for this text
+                subcluster_title = await generate_semantic_title(cluster_texts)
+                with get_duckdb_connection() as subcluster_conn:
+                    subcluster_conn.execute(
+                        """
+                        INSERT INTO subclusters (category_id, title, row_count, percentage)
+                        VALUES (?, ?, ?, ?)
+                        RETURNING id
+                        """,
+                        [
+                            category_id,
+                            subcluster_title,
+                            len(cluster_texts),
+                            100.0,  # 100% since it's the only subcluster
+                        ],
+                    )
+                    subcluster_id = subcluster_conn.fetchone()[0]
+
+                # Insert text cluster relationships
+                with get_duckdb_connection() as text_cluster_conn:
+                    for text in cluster_texts:
+                        text_cluster_conn.execute(
+                            """
+                            INSERT INTO text_clusters (text_id, subcluster_id, membership_score)
+                            SELECT texts.id, ?, 1.0
+                            FROM texts
+                            WHERE texts.dataset_id = ? AND texts.text = ?
+                            """,
+                            [subcluster_id, dataset_id, text],
+                        )
                 continue
 
-            # Generate a semantic title for this subcluster
-            subcluster_title = await generate_semantic_title(cluster_texts_data)
-            cluster_titles[cluster_idx] = subcluster_title
-            logger.info(
-                f"Generated title for cluster {cluster_idx}: {subcluster_title}"
+            # Perform subclustering for clusters with 2 or more texts
+            subclustering = AgglomerativeClustering(
+                n_clusters=None,
+                distance_threshold=DISTANCE_THRESHOLD * 0.5,
+                metric="cosine",
+                linkage="complete",
             )
+            subclusters = subclustering.fit_predict(cluster_embeddings)
 
-        # Generate overarching categories for clusters
-        unique_titles = list(cluster_titles.values())
-        category_name = await derive_overarching_category(unique_titles)
-        logger.info(f"Generated overarching category: {category_name}")
+            # Process each subcluster
+            unique_subclusters = np.unique(subclusters)
+            for subcluster_id in unique_subclusters:
+                # Get texts in this subcluster
+                subcluster_texts = [
+                    text
+                    for i, text in enumerate(cluster_texts)
+                    if subclusters[i] == subcluster_id
+                ]
 
-        # Now create the database entries
-        for cluster_idx in range(n_clusters):
-            # Get texts in this cluster with scores
-            cluster_texts_with_scores = [
-                (text, label, score)
-                for text, label, score in zip(
-                    texts, cluster_labels, kmeans.transform(vectors).min(axis=1)
-                )
-                if label == cluster_idx
-            ]
+                # Generate subcluster title
+                subcluster_title = await generate_semantic_title(subcluster_texts)
 
-            if not cluster_texts_with_scores:
-                continue
+                # Create subcluster
+                with get_duckdb_connection() as subcluster_conn:
+                    subcluster_conn.execute(
+                        """
+                        INSERT INTO subclusters (category_id, title, row_count, percentage)
+                        VALUES (?, ?, ?, ?)
+                        RETURNING id
+                        """,
+                        [
+                            category_id,
+                            subcluster_title,
+                            len(subcluster_texts),
+                            len(subcluster_texts) / len(cluster_texts) * 100,
+                        ],
+                    )
+                    subcluster_id = subcluster_conn.fetchone()[0]
 
-            # Check if we have a semantic title for this cluster
-            cluster_title = cluster_titles.get(
-                cluster_idx, f"Subcluster {cluster_idx + 1}"
-            )
+                # Insert text cluster relationships
+                with get_duckdb_connection() as text_cluster_conn:
+                    for text in subcluster_texts:
+                        text_cluster_conn.execute(
+                            """
+                            INSERT INTO text_clusters (text_id, subcluster_id, membership_score)
+                            SELECT texts.id, ?, 1.0
+                            FROM texts
+                            WHERE texts.dataset_id = ? AND texts.text = ?
+                            """,
+                            [subcluster_id, dataset_id, text],
+                        )
 
-            # Create category
-            category = Category(
-                dataset_id=dataset_id,
-                name=category_name,
-                total_rows=len(cluster_texts_with_scores),
-                percentage=len(cluster_texts_with_scores) / total_texts * 100,
-            )
-            db.add(category)
-            db.flush()
-            categories.append(category)
-
-            # Create subcluster
-            subcluster = Subcluster(
-                category_id=category.id,
-                title=cluster_title,
-                row_count=len(cluster_texts_with_scores),
-                percentage=len(cluster_texts_with_scores) / total_texts * 100,
-            )
-            db.add(subcluster)
-            db.flush()
-            subclusters.append(subcluster)
-
-            # Add text memberships
-            for text, _, score in cluster_texts_with_scores:
-                text_obj = next(t for t in text_objects if t.text == text)
-                text_cluster = TextCluster(
-                    text_id=text_obj.id,
-                    subcluster_id=subcluster.id,
-                    membership_score=float(score),
-                )
-                db.add(text_cluster)
-
-        db.commit()
-        logger.info(
-            f"Successfully created {len(categories)} categories and {len(subclusters)} subclusters"
+        # Update dataset clustering status
+        dataset = (
+            db.query(DatasetMetadata).filter(DatasetMetadata.id == dataset_id).first()
         )
+        if dataset:
+            dataset.is_clustered = True
+            db.commit()
+
+        # Get final results
+        categories = db.query(Category).filter(Category.dataset_id == dataset_id).all()
+        subclusters = (
+            db.query(Subcluster)
+            .filter(Subcluster.category_id.in_([c.id for c in categories]))
+            .all()
+        )
+
         return categories, subclusters
 
     except Exception as e:
-        db.rollback()
         logger.exception(f"Error during clustering: {str(e)}")
         raise

@@ -181,8 +181,17 @@ export default function DatasetsPage() {
           <Title order={2}>Datasets</Title>
           <Button
             onClick={() => router.push('/dashboard/datasets/create')}
-            variant="light"
-            color="blue"
+            variant="filled"
+            color="black"
+            radius="md"
+            styles={{
+              root: {
+                transition: 'background-color 0.2s ease',
+                '&:hover': {
+                  backgroundColor: '#333',
+                },
+              },
+            }}
           >
             Create Dataset
           </Button>
@@ -248,8 +257,16 @@ export default function DatasetsPage() {
                     <Tooltip label="View Dataset">
                       <ActionIcon
                         variant="light"
-                        color="blue"
+                        color="black"
                         onClick={() => handleView(dataset.id)}
+                        styles={{
+                          root: {
+                            transition: 'background-color 0.2s ease',
+                            '&:hover': {
+                              backgroundColor: '#f0f0f0',
+                            },
+                          },
+                        }}
                       >
                         <IconEye style={{ width: rem(16), height: rem(16) }} />
                       </ActionIcon>
@@ -257,8 +274,16 @@ export default function DatasetsPage() {
                     <Tooltip label="Verify Dataset">
                       <ActionIcon
                         variant="light"
-                        color="green"
+                        color="black"
                         onClick={() => handleRefresh(dataset.id)}
+                        styles={{
+                          root: {
+                            transition: 'background-color 0.2s ease',
+                            '&:hover': {
+                              backgroundColor: '#f0f0f0',
+                            },
+                          },
+                        }}
                       >
                         <IconRefresh style={{ width: rem(16), height: rem(16) }} />
                       </ActionIcon>
@@ -266,9 +291,17 @@ export default function DatasetsPage() {
                     <Tooltip label="Cluster Dataset">
                       <ActionIcon
                         variant="light"
-                        color="blue"
+                        color="black"
                         onClick={() => handleCluster(dataset.id)}
                         loading={actionLoading === dataset.id}
+                        styles={{
+                          root: {
+                            transition: 'background-color 0.2s ease',
+                            '&:hover': {
+                              backgroundColor: '#f0f0f0',
+                            },
+                          },
+                        }}
                       >
                         <IconPlus style={{ width: rem(16), height: rem(16) }} />
                       </ActionIcon>
@@ -279,6 +312,14 @@ export default function DatasetsPage() {
                         color="red"
                         onClick={() => handleDelete(dataset.id)}
                         loading={actionLoading === dataset.id}
+                        styles={{
+                          root: {
+                            transition: 'background-color 0.2s ease',
+                            '&:hover': {
+                              backgroundColor: '#ffebee',
+                            },
+                          },
+                        }}
                       >
                         <IconTrash style={{ width: rem(16), height: rem(16) }} />
                       </ActionIcon>

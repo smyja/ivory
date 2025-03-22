@@ -29,7 +29,6 @@ const data = [
       { link: '/dashboard/datasets', label: 'Datasets' },
       { link: '/dashboard/datasets/create', label: 'Create Dataset' },
       { link: '/dashboard/datasets/cluster/history', label: 'Clustering History' },
-      { link: '/dashboard/datasets/cluster', label: 'Cluster' },
     ],
   },
   { link: '/dashboard/insight', label: 'Insight', icon: IconFingerprint },
@@ -75,8 +74,8 @@ export function NavbarSimpleColored() {
                 <UnstyledButton
                   onClick={() => setOpenGroup((prev) => (prev === item.label ? '' : item.label))}
                   className={`${classes.control} ${active === item.label || item.links.some((subLink) => pathname === subLink.link)
-                      ? classes.active
-                      : ''
+                    ? classes.active
+                    : ''
                     }`}
                 >
                   <Group justify="space-between">

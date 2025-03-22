@@ -9,7 +9,7 @@ from models import (
     TextCluster,
 )
 from utils.clustering import cluster_texts
-from utils.database import get_db
+from utils.database import get_db, get_duckdb_connection
 from sqlalchemy.orm import Session
 import logging
 
@@ -73,35 +73,65 @@ async def list_subclusters(category_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/subclusters/{subcluster_id}/texts")
-async def list_subcluster_texts(subcluster_id: int, db: Session = Depends(get_db)):
+async def list_subcluster_texts(subcluster_id: int):
     """List all texts in a specific subcluster."""
     try:
-        subcluster = db.query(Subcluster).filter(Subcluster.id == subcluster_id).first()
-        if not subcluster:
-            raise HTTPException(
-                status_code=404, detail=f"Subcluster {subcluster_id} not found"
+        logger.info(f"Fetching texts for subcluster {subcluster_id}")
+
+        with get_duckdb_connection() as conn:
+            # First check if subcluster exists
+            subcluster = conn.execute(
+                "SELECT * FROM subclusters WHERE id = ?", [subcluster_id]
+            ).fetchone()
+
+            if not subcluster:
+                logger.error(f"Subcluster {subcluster_id} not found")
+                raise HTTPException(
+                    status_code=404, detail=f"Subcluster {subcluster_id} not found"
+                )
+
+            logger.info(f"Found subcluster: {subcluster}")
+
+            # Count how many text_clusters entries exist for this subcluster
+            count = conn.execute(
+                "SELECT COUNT(*) FROM text_clusters WHERE subcluster_id = ?",
+                [subcluster_id],
+            ).fetchone()[0]
+
+            logger.info(
+                f"Found {count} text_clusters entries for subcluster {subcluster_id}"
             )
 
-        # Query texts with their membership scores
-        texts_with_scores = (
-            db.query(TextDB, TextCluster.membership_score)
-            .join(TextCluster, TextDB.id == TextCluster.text_id)
-            .filter(TextCluster.subcluster_id == subcluster_id)
-            .order_by(TextCluster.membership_score.desc())
-            .all()
-        )
+            # Query texts with their membership scores
+            texts_with_scores = conn.execute(
+                """
+                SELECT t.id, t.text, tc.membership_score
+                FROM texts t
+                JOIN text_clusters tc ON t.id = tc.text_id
+                WHERE tc.subcluster_id = ?
+                ORDER BY tc.membership_score DESC
+            """,
+                [subcluster_id],
+            ).fetchall()
 
-        return {
-            "subcluster": SubclusterResponse.model_validate(subcluster),
-            "texts": [
-                {
-                    "id": t.id,
-                    "text": t.text,
-                    "membership_score": score,
-                }
-                for t, score in texts_with_scores
-            ],
-        }
+            logger.info(
+                f"Retrieved {len(texts_with_scores)} texts for subcluster {subcluster_id}"
+            )
+
+            return {
+                "subcluster": {
+                    "id": subcluster[0],  # id
+                    "title": subcluster[2],  # title
+                    "row_count": subcluster[3],  # row_count
+                    "percentage": subcluster[4],  # percentage
+                },
+                "texts": [
+                    {"id": t[0], "text": t[1], "membership_score": t[2]}
+                    for t in texts_with_scores
+                ],
+            }
     except Exception as e:
-        logger.exception(f"Error listing texts: {str(e)}")
+        logger.exception(
+            f"Error listing texts for subcluster {subcluster_id}: {str(e)}"
+        )
         raise HTTPException(status_code=500, detail=str(e))

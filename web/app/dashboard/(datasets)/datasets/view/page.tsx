@@ -66,11 +66,14 @@ interface DatasetInfo {
   };
 }
 
+const BACKEND_PAGE_SIZE = 10; // Fetch 100 records at a time from backend
+
 const DatasetView: React.FC = () => {
   const theme = useMantineTheme();
   const searchParams = useSearchParams();
   const router = useRouter();
   const datasetId = searchParams.get('id');
+  const subclusterId = searchParams.get('subcluster');
 
   const [renderMarkdown, setRenderMarkdown] = useState<boolean>(false);
   const [currentPage, setCurrentPage] = useState<number>(1);
@@ -83,19 +86,48 @@ const DatasetView: React.FC = () => {
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState<{ key: string; value: string } | null>(null);
   const [datasetInfo, setDatasetInfo] = useState<DatasetInfo | null>(null);
+  const [records, setRecords] = useState<Record[]>([]);
+  const [isInitialLoading, setIsInitialLoading] = useState<boolean>(true);
+  const [isPageLoading, setIsPageLoading] = useState<boolean>(false);
+  const [currentBackendPage, setCurrentBackendPage] = useState<number>(1);
+  const [cachedRecords, setCachedRecords] = useState<Record[]>([]);
 
   useEffect(() => {
-    if (!datasetId) {
-      notifications.show({
-        title: 'Error',
-        message: 'No dataset ID provided',
-        color: 'red',
-      });
-      router.push('/dashboard/datasets');
-      return;
+    if (datasetId) {
+      fetchDatasetInfo();
+      if (subclusterId) {
+        fetchSubclusterTexts();
+      } else {
+        fetchInitialRecords();
+      }
     }
-    fetchDatasetInfo();
-  }, [datasetId]);
+  }, [datasetId, subclusterId]);
+
+  // Calculate which backend page we need based on the current frontend page
+  useEffect(() => {
+    const requiredBackendPage = Math.ceil(currentPage / BACKEND_PAGE_SIZE);
+    if (requiredBackendPage !== currentBackendPage) {
+      setCurrentBackendPage(requiredBackendPage);
+    }
+  }, [currentPage]);
+
+  // Fetch backend page when it changes
+  useEffect(() => {
+    if (datasetId && !subclusterId && !isInitialLoading) {
+      fetchBackendPage(currentBackendPage);
+    }
+  }, [currentBackendPage]);
+
+  // Update displayed record when page changes
+  useEffect(() => {
+    if (cachedRecords.length > 0) {
+      const indexInBackendPage = (currentPage - 1) % BACKEND_PAGE_SIZE;
+      if (cachedRecords[indexInBackendPage]) {
+        setFilteredRecords([cachedRecords[indexInBackendPage]]);
+        setRecords([cachedRecords[indexInBackendPage]]);
+      }
+    }
+  }, [currentPage, cachedRecords]);
 
   const fetchDatasetInfo = async () => {
     try {
@@ -105,7 +137,6 @@ const DatasetView: React.FC = () => {
       }
       const data = await response.json();
       setDatasetInfo(data);
-      fetchData();
     } catch (error) {
       console.error('Error fetching dataset info:', error);
       notifications.show({
@@ -117,30 +148,74 @@ const DatasetView: React.FC = () => {
     }
   };
 
-  const fetchData = async () => {
-    if (!datasetId) return;
-
-    setLoading(true);
+  const fetchInitialRecords = async () => {
     try {
+      setIsInitialLoading(true);
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}/records?page=${currentPage}&page_size=10`
+        `${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}/records?page=1&page_size=${BACKEND_PAGE_SIZE}`
       );
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ detail: 'Unknown error occurred' }));
-        throw new Error(errorData.detail || `HTTP error! Status: ${response.status}`);
+        throw new Error('Failed to fetch records');
       }
-
       const data: ApiResponse = await response.json();
-      setAllRecords(data.records);
-      setFilteredRecords(data.records);
+      setCachedRecords(data.records);
       setTotalRecords(data.total_records);
-      setError(null);
+      // Show the first record
+      setFilteredRecords([data.records[0]]);
+      setRecords([data.records[0]]);
     } catch (error: any) {
-      setError(error.message || 'Failed to fetch data');
-      console.error('Error fetching data:', error);
       notifications.show({
         title: 'Error',
-        message: error.message || 'Failed to fetch dataset records',
+        message: error.message || 'Failed to fetch records',
+        color: 'red',
+      });
+    } finally {
+      setIsInitialLoading(false);
+    }
+  };
+
+  const fetchBackendPage = async (backendPage: number) => {
+    try {
+      setIsPageLoading(true);
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}/records?page=${backendPage}&page_size=${BACKEND_PAGE_SIZE}`
+      );
+      if (!response.ok) {
+        throw new Error('Failed to fetch records');
+      }
+      const data: ApiResponse = await response.json();
+      setCachedRecords(data.records);
+
+      // Calculate the index in the current backend page
+      const indexInBackendPage = (currentPage - 1) % BACKEND_PAGE_SIZE;
+      setFilteredRecords([data.records[indexInBackendPage]]);
+      setRecords([data.records[indexInBackendPage]]);
+    } catch (error: any) {
+      notifications.show({
+        title: 'Error',
+        message: error.message || 'Failed to fetch records',
+        color: 'red',
+      });
+    } finally {
+      setIsPageLoading(false);
+    }
+  };
+
+  const fetchSubclusterTexts = async () => {
+    try {
+      setLoading(true);
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/subclusters/${subclusterId}/texts`
+      );
+      if (!response.ok) {
+        throw new Error('Failed to fetch subcluster texts');
+      }
+      const data = await response.json();
+      setRecords(data.texts.map((text: any) => ({ text: text.text })));
+    } catch (error: any) {
+      notifications.show({
+        title: 'Error',
+        message: error.message || 'Failed to fetch subcluster texts',
         color: 'red',
       });
     } finally {
@@ -148,27 +223,44 @@ const DatasetView: React.FC = () => {
     }
   };
 
-  useEffect(() => {
-    fetchData();
-  }, [currentPage]);
-
-  const filterRecords = () => {
-    if (searchTerms.length === 0) {
-      setFilteredRecords(allRecords);
-    } else {
-      const filtered = allRecords.filter((record) =>
-        Object.values(record).some((value) =>
-          searchTerms.some((term) => value.toLowerCase().includes(term.toLowerCase()))
-        )
-      );
-      setFilteredRecords(filtered);
-    }
-    setCurrentPage(1);
-  };
-
-  const handleSearch = (term: string) => {
+  const handleSearch = async (term: string) => {
     const terms = term.split(' ').filter((t) => t.trim() !== '');
     setSearchTerms(terms);
+
+    if (terms.length === 0) {
+      fetchInitialRecords();
+      return;
+    }
+
+    try {
+      setIsInitialLoading(true);
+      const searchParams = new URLSearchParams({
+        page: '1',
+        page_size: BACKEND_PAGE_SIZE.toString(),
+        search: terms.join(' ')
+      });
+
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}/records?${searchParams}`
+      );
+      if (!response.ok) {
+        throw new Error('Failed to search records');
+      }
+      const data: ApiResponse = await response.json();
+      setCachedRecords(data.records);
+      setTotalRecords(data.total_records);
+      setCurrentPage(1);
+      // Show the first record of search results
+      setFilteredRecords([data.records[0]]);
+    } catch (error: any) {
+      notifications.show({
+        title: 'Error',
+        message: error.message || 'Failed to search records',
+        color: 'red',
+      });
+    } finally {
+      setIsInitialLoading(false);
+    }
   };
 
   const preStyles: React.CSSProperties = {
@@ -215,7 +307,7 @@ const DatasetView: React.FC = () => {
 
   return (
     <Container my="md" fluid>
-      <LoadingOverlay visible={loading} overlayProps={{ blur: 2 }} />
+      <LoadingOverlay visible={isInitialLoading} overlayProps={{ blur: 2 }} />
       <Card shadow="sm" radius="md" withBorder mb="md">
         <Group justify="space-between" mb="md">
           <div>
@@ -223,17 +315,42 @@ const DatasetView: React.FC = () => {
             <Text c="dimmed" size="sm">
               {datasetInfo?.subset ? `Subset: ${datasetInfo.subset}` : 'No subset'} •{' '}
               {datasetInfo?.split ? `Split: ${datasetInfo.split}` : 'No split'}
+              {subclusterId && ' • Viewing Subcluster Texts'}
             </Text>
           </div>
           <Group>
+            {!subclusterId && (
+              <Button
+                variant="filled"
+                color="black"
+                radius="md"
+                onClick={() => router.push(`/dashboard/datasets/cluster?id=${datasetId}`)}
+                styles={{
+                  root: {
+                    transition: 'background-color 0.2s ease',
+                    '&:hover': {
+                      backgroundColor: '#333',
+                    },
+                  },
+                }}
+              >
+                View Clusters
+              </Button>
+            )}
             <Button
               variant="light"
-              color="blue"
-              onClick={() => router.push(`/dashboard/datasets/cluster?id=${datasetId}`)}
+              color="black"
+              radius="md"
+              onClick={() => router.push('/dashboard/datasets')}
+              styles={{
+                root: {
+                  transition: 'background-color 0.2s ease',
+                  '&:hover': {
+                    backgroundColor: '#f0f0f0',
+                  },
+                },
+              }}
             >
-              View Clusters
-            </Button>
-            <Button variant="light" onClick={() => router.push('/dashboard/datasets')}>
               Back to Datasets
             </Button>
           </Group>
@@ -247,17 +364,22 @@ const DatasetView: React.FC = () => {
               withBorder
               inheritPadding
               py="xs"
-              style={{ backgroundColor: 'lavenderblush' }}
+              style={{
+                backgroundColor: 'lavenderblush',
+                opacity: isPageLoading ? 0.7 : 1,
+                transition: 'opacity 0.2s ease'
+              }}
             >
               <Group justify="space-between" align="center">
                 <Text fw={300} size="sm">
-                  Dataset Record
+                  Dataset Record {isPageLoading && '(Loading...)'}
                 </Text>
                 <Group gap="xs">
                   <CustomPagination
                     currentPage={currentPage}
-                    totalPages={Math.ceil(totalRecords / 10)}
+                    totalPages={totalRecords} // Since PAGE_SIZE is 1, totalPages equals totalRecords
                     onPageChange={setCurrentPage}
+                    disabled={isPageLoading}
                   />
                   <Switch
                     checked={renderMarkdown}

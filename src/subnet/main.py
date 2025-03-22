@@ -1,11 +1,12 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from fastapi.openapi.utils import get_openapi
 import logging
 from dotenv import load_dotenv
 from routes.datasets import router as dataset_router
+from routes.api import router as api_router
 
 # Load environment variables
 load_dotenv()
@@ -14,11 +15,12 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Check for TOGETHER_API_KEY
-if not os.environ.get("TOGETHER_API_KEY"):
-    logger.error("TOGETHER_API_KEY is not set in the environment variables")
-    raise EnvironmentError(
-        "TOGETHER_API_KEY is not set. Please set this environment variable before running the application."
+# Check for OPENROUTER_API_KEY
+if not os.environ.get("OPENROUTER_API_KEY"):
+    logger.error("OPENROUTER_API_KEY is not set in the environment variables")
+    raise HTTPException(
+        status_code=500,
+        detail="OPENROUTER_API_KEY is not set. Please set this environment variable before running the application.",
     )
 
 
@@ -47,6 +49,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(dataset_router, prefix="/datasets", tags=["datasets"])
+app.include_router(api_router, tags=["api"])
 
 
 def custom_openapi():
@@ -56,7 +59,7 @@ def custom_openapi():
     openapi_schema = get_openapi(
         title="Clustering and Dataset API",
         version="1.0.0",
-        description="API for clustering questions, generating titles, and managing datasets",
+        description="API for clustering and managing datasets",
         routes=app.routes,
     )
 

@@ -52,7 +52,9 @@ export default function ClusteringHistoryPage() {
 
     return (
         <Container size="xl" py="xl">
-            <Title order={2} mb="xl">Clustering History</Title>
+            <Title order={1} mt={20} mb={20} fw={300}>
+                Clustering History
+            </Title>
             <ClusteringTable selectedStatus={selectedStatus} history={history} />
         </Container>
     );

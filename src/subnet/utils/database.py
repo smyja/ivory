@@ -180,7 +180,9 @@ def init_db():
             CREATE SEQUENCE IF NOT EXISTS texts_id_seq;
             CREATE TABLE IF NOT EXISTS texts (
                 id INTEGER PRIMARY KEY DEFAULT(nextval('texts_id_seq')),
-                text VARCHAR NOT NULL
+                dataset_id INTEGER NOT NULL,
+                text VARCHAR NOT NULL,
+                FOREIGN KEY(dataset_id) REFERENCES dataset_metadata(id)
             );
         """
         )
@@ -258,30 +260,21 @@ def get_db():
 
 @contextmanager
 def get_duckdb_connection():
-    """Get a DuckDB connection from the pool with proper cleanup."""
+    """Get a DuckDB connection."""
     conn = None
     try:
-        # Try to reuse an existing connection
-        if _duckdb_connections:
-            conn = _duckdb_connections.pop()
-        else:
-            # Create a new connection if none available
-            conn = duckdb.connect(
-                "datasets.db",
-                read_only=False,  # Use write mode for all operations
-            )
+        conn = duckdb.connect("datasets.db")
         yield conn
+    except Exception as e:
+        logger.error(f"Error with DuckDB connection: {str(e)}")
+        raise
     finally:
         if conn:
             try:
-                # Return the connection to the pool instead of closing it
-                _duckdb_connections.append(conn)
+                conn.close()
             except Exception as e:
-                logger.error(f"Error managing DuckDB connection: {str(e)}")
-                try:
-                    conn.close()
-                except:
-                    pass
+                logger.error(f"Error closing DuckDB connection: {str(e)}")
+                pass
 
 
 BASE_API_URL = "https://datasets-server.huggingface.co/rows"

@@ -197,3 +197,31 @@ class SQLModel(BaseModel):
 
 class Config:
     arbitrary_types_allowed = True
+
+
+class DatasetStatus(str, Enum):
+    PENDING = "pending"
+    DOWNLOADING = "downloading"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class ClusteringStatus(str, Enum):
+    NOT_STARTED = "not_started"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class DatasetResponse(BaseModel):
+    id: int
+    name: str
+    subset: Optional[str] = None
+    split: Optional[str] = None
+    status: str
+    download_date: datetime
+    is_clustered: bool
+    clustering_status: Optional[str] = "not_started"
+
+    class Config:
+        from_attributes = True

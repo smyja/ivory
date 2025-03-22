@@ -100,11 +100,27 @@ export function ClusteringTable({ selectedStatus, history }: ClusteringTableProp
       <Table.Td>{formatDate(row.completed_at)}</Table.Td>
       <Table.Td>
         <Button
-          variant="light"
+          variant="filled"
           size="xs"
+          color="black"
+          radius="md"
           rightSection={<IconExternalLink size={14} />}
           onClick={() => router.push(`/dashboard/datasets/cluster?id=${row.dataset_id}`)}
           disabled={row.clustering_status !== 'completed'}
+          styles={{
+            root: {
+              transition: 'background-color 0.2s ease',
+              '&:hover': {
+                backgroundColor: '#333',
+              },
+              '&:disabled': {
+                backgroundColor: '#ccc',
+                '&:hover': {
+                  backgroundColor: '#ccc',
+                },
+              },
+            },
+          }}
         >
           View Results
         </Button>
