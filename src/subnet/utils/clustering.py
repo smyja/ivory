@@ -48,6 +48,7 @@ async def cluster_texts(
                 """,
                 [dataset_id],
             )
+
             # Then delete subclusters
             cleanup_conn.execute(
                 """
@@ -60,6 +61,7 @@ async def cluster_texts(
                 """,
                 [dataset_id],
             )
+
             # Then delete categories
             cleanup_conn.execute(
                 """
@@ -68,49 +70,42 @@ async def cluster_texts(
                 """,
                 [dataset_id],
             )
-            # Finally delete texts
+
+            # Finally clean up orphaned texts
             cleanup_conn.execute(
                 """
                 DELETE FROM texts
-                WHERE id IN (
-                    SELECT tc.text_id
-                    FROM text_clusters tc
-                    JOIN subclusters s ON tc.subcluster_id = s.id
-                    JOIN categories c ON s.category_id = c.id
-                    WHERE c.dataset_id = ?
+                WHERE dataset_id = ?
+                AND id NOT IN (
+                    SELECT DISTINCT text_id
+                    FROM text_clusters
                 )
                 """,
                 [dataset_id],
             )
 
-        # Insert texts into the database
+        # Insert or update texts in the database
         with get_duckdb_connection() as insert_conn:
             # First check if dataset_id column exists
             columns = insert_conn.execute("DESCRIBE texts").fetchall()
             column_names = [col[0] for col in columns]
 
-            if "dataset_id" in column_names:
-                # If column exists, use it
-                for text in texts:
-                    insert_conn.execute(
-                        """
-                        INSERT INTO texts (text, dataset_id)
-                        VALUES (?, ?)
-                        """,
-                        [text, dataset_id],
-                    )
-            else:
-                # If column doesn't exist, add it first
+            if "dataset_id" not in column_names:
                 insert_conn.execute("ALTER TABLE texts ADD COLUMN dataset_id INTEGER")
-                # Then insert the data
-                for text in texts:
-                    insert_conn.execute(
-                        """
-                        INSERT INTO texts (text, dataset_id)
-                        VALUES (?, ?)
-                        """,
-                        [text, dataset_id],
+
+            # Insert texts with ON CONFLICT DO NOTHING to handle duplicates
+            for text in texts:
+                insert_conn.execute(
+                    """
+                    INSERT INTO texts (text, dataset_id)
+                    SELECT ?, ?
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM texts 
+                        WHERE text = ? AND dataset_id = ?
                     )
+                    """,
+                    [text, dataset_id, text, dataset_id],
+                )
 
         # Get embeddings for all texts
         embeddings = await vectorize_texts(texts)
@@ -182,9 +177,11 @@ async def cluster_texts(
                         text_cluster_conn.execute(
                             """
                             INSERT INTO text_clusters (text_id, subcluster_id, membership_score)
-                            SELECT texts.id, ?, 1.0
-                            FROM texts
-                            WHERE texts.dataset_id = ? AND texts.text = ?
+                            SELECT t.id, ?, 1.0
+                            FROM texts t
+                            WHERE t.dataset_id = ? AND t.text = ?
+                            ON CONFLICT (text_id, subcluster_id) 
+                            DO UPDATE SET membership_score = 1.0
                             """,
                             [subcluster_id, dataset_id, text],
                         )
@@ -235,9 +232,11 @@ async def cluster_texts(
                         text_cluster_conn.execute(
                             """
                             INSERT INTO text_clusters (text_id, subcluster_id, membership_score)
-                            SELECT texts.id, ?, 1.0
-                            FROM texts
-                            WHERE texts.dataset_id = ? AND texts.text = ?
+                            SELECT t.id, ?, 1.0
+                            FROM texts t
+                            WHERE t.dataset_id = ? AND t.text = ?
+                            ON CONFLICT (text_id, subcluster_id) 
+                            DO UPDATE SET membership_score = 1.0
                             """,
                             [subcluster_id, dataset_id, text],
                         )

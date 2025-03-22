@@ -685,92 +685,107 @@ async def get_clusters(dataset_id: int, db: Session = Depends(get_db)):
             return {"status": "not_started"}
 
         # Query for categories
-        conn = get_duckdb_connection()
+        categories = []
+        total_texts = 0
+
         try:
-            # Get categories with total text count
-            total_texts = conn.execute(
-                """
-                SELECT COUNT(*)
-                FROM texts
-                WHERE dataset_id = ?
-                """,
-                [dataset_id],
-            ).fetchone()[0]
-
-            # Get categories
-            categories_result = conn.execute(
-                """
-                SELECT c.id, c.name, c.total_rows, c.percentage
-                FROM categories c
-                WHERE c.dataset_id = ?
-                ORDER BY c.total_rows DESC
-                """,
-                [dataset_id],
-            ).fetchall()
-
-            categories = []
-            for cat_id, name, total_rows, percentage in categories_result:
-                # Get subclusters for this category
-                subclusters_result = conn.execute(
+            with get_duckdb_connection() as duckdb_conn:
+                # Get total texts count
+                total_texts = duckdb_conn.execute(
                     """
-                    SELECT s.id, s.title, s.row_count, s.percentage
-                    FROM subclusters s
-                    WHERE s.category_id = ?
-                    ORDER BY s.row_count DESC
+                    SELECT COUNT(*)
+                    FROM texts
+                    WHERE dataset_id = ?
                     """,
-                    [cat_id],
+                    [dataset_id],
+                ).fetchone()[0]
+
+                # Get categories
+                categories_result = duckdb_conn.execute(
+                    """
+                    SELECT c.id, c.name, c.total_rows, c.percentage
+                    FROM categories c
+                    WHERE c.dataset_id = ?
+                    ORDER BY c.total_rows DESC
+                    """,
+                    [dataset_id],
                 ).fetchall()
 
-                subclusters = []
-                for sub_id, title, row_count, sub_percentage in subclusters_result:
-                    # Get ALL texts for this subcluster
-                    texts_result = conn.execute(
+                for cat_id, name, total_rows, percentage in categories_result:
+                    # Get subclusters for this category
+                    subclusters_result = duckdb_conn.execute(
                         """
-                        SELECT tc.text_id, t.text, tc.membership_score
-                        FROM text_clusters tc
-                        JOIN texts t ON tc.text_id = t.id
-                        WHERE tc.subcluster_id = ?
-                        ORDER BY tc.membership_score DESC
+                        SELECT s.id, s.title, s.row_count, s.percentage
+                        FROM subclusters s
+                        WHERE s.category_id = ?
+                        ORDER BY s.row_count DESC
                         """,
-                        [sub_id],
+                        [cat_id],
                     ).fetchall()
 
-                    texts = [
-                        {"text_id": text_id, "text": text, "membership_score": score}
-                        for text_id, text, score in texts_result
-                    ]
+                    subclusters = []
+                    for sub_id, title, row_count, sub_percentage in subclusters_result:
+                        # Get texts for this subcluster
+                        texts_result = duckdb_conn.execute(
+                            """
+                            SELECT tc.text_id, t.text, tc.membership_score
+                            FROM text_clusters tc
+                            JOIN texts t ON tc.text_id = t.id
+                            WHERE tc.subcluster_id = ?
+                            ORDER BY tc.membership_score DESC
+                            """,
+                            [sub_id],
+                        ).fetchall()
 
-                    subclusters.append(
+                        texts = [
+                            {
+                                "text_id": text_id,
+                                "text": text,
+                                "membership_score": score,
+                            }
+                            for text_id, text, score in texts_result
+                        ]
+
+                        subclusters.append(
+                            {
+                                "id": sub_id,
+                                "title": title,
+                                "row_count": row_count,
+                                "percentage": sub_percentage,
+                                "texts": texts,
+                            }
+                        )
+
+                    categories.append(
                         {
-                            "id": sub_id,
-                            "title": title,
-                            "row_count": row_count,
-                            "percentage": sub_percentage,
-                            "texts": texts,
+                            "id": cat_id,
+                            "name": name,
+                            "total_rows": total_rows,
+                            "percentage": percentage,
+                            "subclusters": subclusters,
                         }
                     )
 
-                categories.append(
-                    {
-                        "id": cat_id,
-                        "name": name,
-                        "total_rows": total_rows,
-                        "percentage": percentage,
-                        "subclusters": subclusters,
-                    }
-                )
+        except Exception as e:
+            logger.exception(f"Error executing DuckDB queries: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Database error while fetching clusters: {str(e)}",
+            )
 
-            return {
-                "status": "completed",
-                "total_texts": total_texts,
-                "categories": categories,
-            }
-        finally:
-            conn.close()
+        return {
+            "status": "completed",
+            "total_texts": total_texts,
+            "categories": categories,
+        }
 
+    except HTTPException as he:
+        raise he
     except Exception as e:
         logger.exception(f"Error getting clusters: {str(e)}")
-        return {"status": "failed", "error": str(e)}
+        raise HTTPException(
+            status_code=500, detail=f"Error retrieving clusters: {str(e)}"
+        )
 
 
 @router.get("/clustering/history")
@@ -801,3 +816,38 @@ async def get_clustering_history(db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"Error getting clustering history: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/subclusters/{subcluster_id}/texts")
+async def get_subcluster_texts(subcluster_id: int, db: Session = Depends(get_db)):
+    """Get all texts for a specific subcluster."""
+    try:
+        with get_duckdb_connection() as duckdb_conn:
+            # Get texts for this subcluster
+            texts_result = duckdb_conn.execute(
+                """
+                SELECT tc.text_id, t.text, tc.membership_score
+                FROM text_clusters tc
+                JOIN texts t ON tc.text_id = t.id
+                WHERE tc.subcluster_id = ?
+                ORDER BY tc.membership_score DESC
+                """,
+                [subcluster_id],
+            ).fetchall()
+
+            texts = [
+                {
+                    "text_id": text_id,
+                    "text": text,
+                    "membership_score": score,
+                }
+                for text_id, text, score in texts_result
+            ]
+
+            return {"texts": texts}
+
+    except Exception as e:
+        logger.exception(f"Error getting subcluster texts: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error retrieving subcluster texts: {str(e)}"
+        )

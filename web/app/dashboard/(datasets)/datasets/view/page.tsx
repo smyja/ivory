@@ -203,22 +203,32 @@ const DatasetView: React.FC = () => {
 
   const fetchSubclusterTexts = async () => {
     try {
+      setIsInitialLoading(true);
       setLoading(true);
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/subclusters/${subclusterId}/texts`
+        `${process.env.NEXT_PUBLIC_API_URL}/datasets/subclusters/${subclusterId}/texts`
       );
       if (!response.ok) {
         throw new Error('Failed to fetch subcluster texts');
       }
       const data = await response.json();
-      setRecords(data.texts.map((text: any) => ({ text: text.text })));
+      // Format records to only show text content
+      const formattedRecords = data.texts.map((text: any) => ({
+        text: text.text
+      }));
+      setRecords(formattedRecords);
+      setFilteredRecords(formattedRecords);
+      setTotalRecords(formattedRecords.length);
+      setCachedRecords(formattedRecords);
     } catch (error: any) {
+      setError(error.message || 'Failed to fetch subcluster texts');
       notifications.show({
         title: 'Error',
         message: error.message || 'Failed to fetch subcluster texts',
         color: 'red',
       });
     } finally {
+      setIsInitialLoading(false);
       setLoading(false);
     }
   };
