@@ -22,7 +22,8 @@ from utils.database import get_duckdb_connection
 logger = logging.getLogger(__name__)
 
 # Constants
-DISTANCE_THRESHOLD = 0.5  # Adjust this value to control cluster granularity
+DISTANCE_THRESHOLD = 0.7  # Increased to create more general categories
+MIN_CLUSTER_SIZE = 2  # Minimum size for a cluster
 
 
 async def cluster_texts(
@@ -110,17 +111,35 @@ async def cluster_texts(
         # Get embeddings for all texts
         embeddings = await vectorize_texts(texts)
 
-        # Perform clustering
+        # First level clustering for major categories (more general)
         clustering = AgglomerativeClustering(
             n_clusters=None,
             distance_threshold=DISTANCE_THRESHOLD,
             metric="cosine",
-            linkage="complete",
+            linkage="average",  # Changed to average for more balanced clusters
         )
         clusters = clustering.fit_predict(embeddings)
 
-        # Get unique clusters
+        # Get unique clusters and merge small clusters
         unique_clusters = np.unique(clusters)
+        cluster_sizes = [sum(clusters == c) for c in unique_clusters]
+
+        # If we have too many small clusters, try to merge them
+        if (
+            len([s for s in cluster_sizes if s < MIN_CLUSTER_SIZE])
+            > len(cluster_sizes) / 2
+        ):
+            # Reduce threshold to create larger clusters
+            clustering = AgglomerativeClustering(
+                n_clusters=None,
+                distance_threshold=DISTANCE_THRESHOLD
+                * 1.2,  # Increase threshold to merge more
+                metric="cosine",
+                linkage="average",
+            )
+            clusters = clustering.fit_predict(embeddings)
+            unique_clusters = np.unique(clusters)
+
         total_texts = len(texts)
 
         # Process each cluster
@@ -134,7 +153,22 @@ async def cluster_texts(
             ]
 
             # Generate category name and create category first
+            # For single-text clusters, still generate a proper category name
             category_name = await derive_overarching_category(cluster_texts)
+
+            # Ensure category name is not too long (max 2 words)
+            if category_name and len(category_name.split()) > 2:
+                words = category_name.split()
+                # Try to keep the most meaningful words
+                if any(w.lower() in ["and", "or", "the", "a", "an"] for w in words):
+                    # Remove common words first
+                    words = [
+                        w
+                        for w in words
+                        if w.lower() not in ["and", "or", "the", "a", "an"]
+                    ]
+                category_name = " ".join(words[:2])
+
             with get_duckdb_connection() as category_conn:
                 category_conn.execute(
                     """
@@ -151,9 +185,8 @@ async def cluster_texts(
                 )
                 category_id = category_conn.fetchone()[0]
 
-            # Skip subclustering if there's only one text
-            if len(cluster_texts) < 2:
-                # Create a single subcluster for this text
+            # For small clusters, still create a subcluster but with a more specific title
+            if len(cluster_texts) < MIN_CLUSTER_SIZE:
                 subcluster_title = await generate_semantic_title(cluster_texts)
                 with get_duckdb_connection() as subcluster_conn:
                     subcluster_conn.execute(
@@ -187,12 +220,13 @@ async def cluster_texts(
                         )
                 continue
 
-            # Perform subclustering for clusters with 2 or more texts
+            # Perform subclustering with a tighter threshold for more specific groups
             subclustering = AgglomerativeClustering(
                 n_clusters=None,
-                distance_threshold=DISTANCE_THRESHOLD * 0.5,
+                distance_threshold=DISTANCE_THRESHOLD
+                * 0.6,  # More granular subclusters
                 metric="cosine",
-                linkage="complete",
+                linkage="complete",  # Use complete linkage for tighter subclusters
             )
             subclusters = subclustering.fit_predict(cluster_embeddings)
 

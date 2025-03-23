@@ -154,9 +154,28 @@ const DatasetView: React.FC = () => {
       const response = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}/records?page=1&page_size=${BACKEND_PAGE_SIZE}`
       );
+
       if (!response.ok) {
-        throw new Error('Failed to fetch records');
+        const errorData = await response.json();
+        let errorMessage = 'Failed to fetch records';
+
+        switch (response.status) {
+          case 404:
+            errorMessage = `Dataset not found: ${errorData.detail}`;
+            break;
+          case 400:
+            errorMessage = `Invalid request: ${errorData.detail}`;
+            break;
+          case 500:
+            errorMessage = `Server error: ${errorData.detail}`;
+            break;
+          default:
+            errorMessage = errorData.detail || errorMessage;
+        }
+
+        throw new Error(errorMessage);
       }
+
       const data: ApiResponse = await response.json();
       setCachedRecords(data.records);
       setTotalRecords(data.total_records);
@@ -164,9 +183,10 @@ const DatasetView: React.FC = () => {
       setFilteredRecords([data.records[0]]);
       setRecords([data.records[0]]);
     } catch (error: any) {
+      setError(error.message);
       notifications.show({
         title: 'Error',
-        message: error.message || 'Failed to fetch records',
+        message: error.message,
         color: 'red',
       });
     } finally {
@@ -180,9 +200,28 @@ const DatasetView: React.FC = () => {
       const response = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}/records?page=${backendPage}&page_size=${BACKEND_PAGE_SIZE}`
       );
+
       if (!response.ok) {
-        throw new Error('Failed to fetch records');
+        const errorData = await response.json();
+        let errorMessage = 'Failed to fetch records';
+
+        switch (response.status) {
+          case 404:
+            errorMessage = `Dataset not found: ${errorData.detail}`;
+            break;
+          case 400:
+            errorMessage = `Invalid request: ${errorData.detail}`;
+            break;
+          case 500:
+            errorMessage = `Server error: ${errorData.detail}`;
+            break;
+          default:
+            errorMessage = errorData.detail || errorMessage;
+        }
+
+        throw new Error(errorMessage);
       }
+
       const data: ApiResponse = await response.json();
       setCachedRecords(data.records);
 
@@ -191,9 +230,10 @@ const DatasetView: React.FC = () => {
       setFilteredRecords([data.records[indexInBackendPage]]);
       setRecords([data.records[indexInBackendPage]]);
     } catch (error: any) {
+      setError(error.message);
       notifications.show({
         title: 'Error',
-        message: error.message || 'Failed to fetch records',
+        message: error.message,
         color: 'red',
       });
     } finally {
@@ -208,11 +248,26 @@ const DatasetView: React.FC = () => {
       const response = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL}/datasets/subclusters/${subclusterId}/texts`
       );
+
       if (!response.ok) {
-        throw new Error('Failed to fetch subcluster texts');
+        const errorData = await response.json();
+        let errorMessage = 'Failed to fetch subcluster texts';
+
+        switch (response.status) {
+          case 404:
+            errorMessage = `Subcluster not found: ${errorData.detail}`;
+            break;
+          case 500:
+            errorMessage = `Server error: ${errorData.detail}`;
+            break;
+          default:
+            errorMessage = errorData.detail || errorMessage;
+        }
+
+        throw new Error(errorMessage);
       }
+
       const data = await response.json();
-      // Format records to only show text content
       const formattedRecords = data.texts.map((text: any) => ({
         text: text.text
       }));
@@ -221,10 +276,10 @@ const DatasetView: React.FC = () => {
       setTotalRecords(formattedRecords.length);
       setCachedRecords(formattedRecords);
     } catch (error: any) {
-      setError(error.message || 'Failed to fetch subcluster texts');
+      setError(error.message);
       notifications.show({
         title: 'Error',
-        message: error.message || 'Failed to fetch subcluster texts',
+        message: error.message,
         color: 'red',
       });
     } finally {

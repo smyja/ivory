@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Group, Paper, Text, Title, Container, Loader, Alert, Card, Pagination } from '@mantine/core';
+import { Group, Paper, Text, Title, Container, Loader, Alert, Card, Pagination, Badge, Grid } from '@mantine/core';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { IconArrowUpRight, IconArrowDownRight } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
@@ -45,7 +45,9 @@ export default function ClusterView() {
     const [categories, setCategories] = useState<Category[]>([]);
     const [titlingStatus, setTitlingStatus] = useState<TitlingStatus>({});
     const [currentPage, setCurrentPage] = useState<{ [key: number]: number }>({});
+    const [subclusterPages, setSubclusterPages] = useState<{ [key: number]: number }>({});
     const ITEMS_PER_PAGE = 6;
+    const SUBCLUSTERS_PER_PAGE = 5;
 
     const handleSubclusterClick = (subclusterId: number) => {
         router.push(`/dashboard/datasets/view?id=${datasetId}&subcluster=${subclusterId}`);
@@ -238,6 +240,79 @@ export default function ClusterView() {
         setCurrentPage(prev => ({ ...prev, [categoryId]: page }));
     };
 
+    const handleSubclusterPageChange = (categoryId: number, page: number) => {
+        setSubclusterPages(prev => ({ ...prev, [categoryId]: page }));
+    };
+
+    const renderSubclusters = (subclusters: Subcluster[], categoryId: number) => {
+        const currentPage = subclusterPages[categoryId] || 1;
+        const startIndex = (currentPage - 1) * SUBCLUSTERS_PER_PAGE;
+        const endIndex = startIndex + SUBCLUSTERS_PER_PAGE;
+        const paginatedSubclusters = subclusters.slice(startIndex, endIndex);
+        const totalPages = Math.ceil(subclusters.length / SUBCLUSTERS_PER_PAGE);
+
+        return (
+            <>
+                {paginatedSubclusters.map((subcluster) => {
+                    const titleStatus = titlingStatus[`cluster-${subcluster.id}`];
+
+                    return (
+                        <Paper
+                            withBorder
+                            p="md"
+                            radius="md"
+                            key={subcluster.id}
+                            className={classes.subclusterCard}
+                            onClick={() => handleSubclusterClick(subcluster.id)}
+                            style={{ cursor: 'pointer' }}
+                        >
+                            <Text className={classes.subclusterTitle} lineClamp={2}>
+                                {titleStatus?.status === 'in_progress' ? (
+                                    <Group gap="xs">
+                                        <Loader size="xs" />
+                                        <span>Generating title...</span>
+                                    </Group>
+                                ) : (
+                                    subcluster.title || titleStatus?.title || `Subcluster ${subcluster.id}`
+                                )}
+                            </Text>
+                            <div>
+                                <Group align="flex-end" gap="xs">
+                                    <Text className={classes.value}>
+                                        {subcluster.row_count.toLocaleString()}
+                                    </Text>
+                                    <Text c={subcluster.percentage > 50 ? 'teal' : 'red'}
+                                        fz="sm"
+                                        fw={500}
+                                        className={classes.diff}>
+                                        <span>{subcluster.percentage.toFixed(1)}%</span>
+                                        {subcluster.percentage > 50 ?
+                                            <IconArrowUpRight size="1rem" stroke={1.5} /> :
+                                            <IconArrowDownRight size="1rem" stroke={1.5} />
+                                        }
+                                    </Text>
+                                </Group>
+                                <Text className={classes.categoryStats}>
+                                    rows in subcluster
+                                </Text>
+                            </div>
+                        </Paper>
+                    );
+                })}
+                {totalPages > 1 && (
+                    <Group justify="center" mt="md">
+                        <Pagination
+                            total={totalPages}
+                            value={currentPage}
+                            onChange={(page) => handleSubclusterPageChange(categoryId, page)}
+                            size="sm"
+                        />
+                    </Group>
+                )}
+            </>
+        );
+    };
+
     if (loading) {
         return (
             <Container size="xl">
@@ -288,61 +363,7 @@ export default function ClusterView() {
                                 </div>
 
                                 <div className={classes.subclusterContainer}>
-                                    {pagedSubclusters.map((subcluster) => {
-                                        const titleStatus = titlingStatus[`cluster-${subcluster.id}`];
-
-                                        return (
-                                            <Paper
-                                                withBorder
-                                                p="md"
-                                                radius="md"
-                                                key={subcluster.id}
-                                                className={classes.subclusterCard}
-                                                onClick={() => handleSubclusterClick(subcluster.id)}
-                                                style={{ cursor: 'pointer' }}
-                                            >
-                                                <Text className={classes.subclusterTitle} lineClamp={2}>
-                                                    {titleStatus?.status === 'in_progress' ? (
-                                                        <Group gap="xs">
-                                                            <Loader size="xs" />
-                                                            <span>Generating title...</span>
-                                                        </Group>
-                                                    ) : (
-                                                        subcluster.title || titleStatus?.title || `Subcluster ${subcluster.id}`
-                                                    )}
-                                                </Text>
-                                                <div>
-                                                    <Group align="flex-end" gap="xs">
-                                                        <Text className={classes.value}>
-                                                            {subcluster.row_count.toLocaleString()}
-                                                        </Text>
-                                                        <Text c={subcluster.percentage > 50 ? 'teal' : 'red'}
-                                                            fz="sm"
-                                                            fw={500}
-                                                            className={classes.diff}>
-                                                            <span>{subcluster.percentage.toFixed(1)}%</span>
-                                                            {subcluster.percentage > 50 ?
-                                                                <IconArrowUpRight size="1rem" stroke={1.5} /> :
-                                                                <IconArrowDownRight size="1rem" stroke={1.5} />
-                                                            }
-                                                        </Text>
-                                                    </Group>
-                                                    <Text className={classes.categoryStats}>
-                                                        rows in subcluster
-                                                    </Text>
-                                                </div>
-                                            </Paper>
-                                        );
-                                    })}
-                                    {totalPages > 1 && (
-                                        <div style={{ gridColumn: '1/-1', display: 'flex', justifyContent: 'center', marginTop: '1rem' }}>
-                                            <Pagination
-                                                total={totalPages}
-                                                value={currentPage[category.id] || 1}
-                                                onChange={(page) => handlePageChange(category.id, page)}
-                                            />
-                                        </div>
-                                    )}
+                                    {renderSubclusters(category.subclusters, category.id)}
                                 </div>
                             </Group>
                         </Card>
