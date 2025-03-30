@@ -17,7 +17,14 @@ import {
 import Link from 'next/link';
 import classes from './NavbarSimpleColored.module.css';
 
-const data = [
+interface NavItem {
+  link?: string;
+  label: string;
+  icon?: any;
+  links?: { link: string; label: string }[];
+}
+
+const data: NavItem[] = [
   { link: '/dashboard', label: 'Home', icon: IconBellRinging },
   { link: '/dashboard/chat', label: 'Chat', icon: IconMessageChatbot },
   { link: '/dashboard/connectors', label: 'Connectors', icon: Icon2fa },
@@ -39,7 +46,7 @@ export function NavbarSimpleColored() {
   const pathname = usePathname();
   const router = useRouter();
 
-  const findLabelByPath = (path) => {
+  const findLabelByPath = (path: string) => {
     const matchingItem = data.find((item) =>
       item.link ? item.link === path : item.links?.some((subLink) => subLink.link === path)
     );
@@ -57,10 +64,12 @@ export function NavbarSimpleColored() {
     };
   }, [pathname]);
 
-  const handleLinkClick = (item) => {
+  const handleLinkClick = (item: NavItem) => {
     setActive(item.label);
-    router.push(item.link);
-    nprogress.set(50);
+    if (item.link) {
+      router.push(item.link);
+      nprogress.set(50);
+    }
   };
 
   return (
@@ -114,14 +123,14 @@ export function NavbarSimpleColored() {
               </Box>
             );
           } else {
-            return (
+            return item.link ? (
               <Link href={item.link} key={item.label} onClick={() => handleLinkClick(item)}>
                 <div className={`${classes.link} ${active === item.label ? classes.active : ''}`}>
                   <item.icon className={classes.linkIcon} stroke={1.5} />
                   <span>{item.label}</span>
                 </div>
               </Link>
-            );
+            ) : null;
           }
         })}
       </div>

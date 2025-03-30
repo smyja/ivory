@@ -1,45 +1,28 @@
 "use client"
-import { useSearchParams,useRouter } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { useConnectNotionMutation } from '@/redux/features/authApiSlice';
 import { useEffect } from 'react';
 
-
+// For static export, we'll create a placeholder page
 const Callback = () => {
-  const [connectNotion, { isLoading }] = useConnectNotionMutation();
   const searchParams = useSearchParams();
   const router = useRouter();
 
   useEffect(() => {
-    const handleConnect = async (authCode:string) => {
-        console.log("Handling connection with auth code:", authCode);
-      try {
-        await connectNotion(authCode).unwrap();
-        // Redirect to dashboard or display success message
-        // router.push('/dashboard'); // Change the route accordingly
-        console.log("success")
-      } catch (err) {
-        console.error(err);
-        // Display error message to the user
-        // You can use state or a notification system for this
-      }
-    };
-
-    if (searchParams) {
-      const authCode = searchParams.get('code');
-
-      if (authCode) {
-        handleConnect(authCode);
-      }
+    const authCode = searchParams?.get('code');
+    if (authCode) {
+      // Store the auth code in localStorage or handle it client-side
+      localStorage.setItem('notion_auth_code', authCode);
+      // Redirect to a page that can handle the connection
+      router.push('/dashboard/connectors?status=connecting');
+    } else {
+      router.push('/dashboard/connectors?status=error');
     }
-  }, [searchParams, connectNotion, router]);
+  }, [searchParams, router]);
 
   return (
-    <div>
-      {isLoading ? (
-        <p>Connecting...</p>
-      ) : (
-        <p>Connected! and Syncing..</p>
-      )}
+    <div className="flex items-center justify-center min-h-screen">
+      <p className="text-lg">Connecting to Notion...</p>
     </div>
   );
 };

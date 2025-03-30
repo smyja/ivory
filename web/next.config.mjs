@@ -12,4 +12,10 @@ export default withBundleAnalyzer({
   experimental: {
     optimizePackageImports: ['@mantine/core', '@mantine/hooks'],
   },
+  output: 'export',
+  images: {
+    unoptimized: true,
+  },
+  // Add trailing slashes to ensure consistent routing
+  trailingSlash: true,
 });
