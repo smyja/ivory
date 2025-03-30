@@ -1,109 +1,110 @@
 # Ivory Project
 
-A full-stack application for clustering and dataset management, built with Next.js and FastAPI.
+This is a monorepo containing both the frontend and backend of the Ivory project.
 
-## Project Structure
+## Prerequisites
 
-The project is organized as a monorepo with two main components:
+- Docker
+- Docker Compose
+- Node.js 18+ (for local development)
+- Python 3.11+ (for local development)
 
-- `web/` - Frontend application built with Next.js and Mantine UI
-- `src/subnet/` - Backend API built with FastAPI
+## Getting Started
 
-## Backend (src/subnet/)
+### Using Docker (Recommended)
 
-The backend is a FastAPI application that provides APIs for:
-- Dataset management
-- API endpoints for data processing
-
-### Prerequisites
-
-- Python 3.8+
-- PostgreSQL
-- Together API Key
-
-### Setup
-
-1. Create and activate a virtual environment:
+1. Clone the repository:
 ```bash
-cd src/subnet
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+git clone https://github.com/yourusername/ivory.git
+cd ivory
+```
+
+2. Start the services:
+```bash
+docker-compose up -d
+```
+
+3. Access the applications:
+- Frontend: http://localhost:3000
+- Backend: http://localhost:8000
+
+The application uses DuckDB for data storage, which is automatically initialized when the container starts.
+
+### Local Development
+
+#### Frontend
+
+1. Navigate to the web directory:
+```bash
+cd web
 ```
 
 2. Install dependencies:
 ```bash
-pip install -r requirements.txt
-```
-
-3. Set up environment variables:
-```bash
-cp .env.example .env
-# Edit .env with your configuration
-```
-
-4. Run the development server:
-```bash
-python main.py
-```
-
-The API will be available at `http://localhost:8000`
-
-## Frontend (web/)
-
-The frontend is a Next.js application with Mantine UI components.
-
-### Prerequisites
-
-- Node.js 18+
-- Yarn
-
-### Setup
-
-1. Install dependencies:
-```bash
-cd web
 yarn install
 ```
 
-2. Run the development server:
+3. Start the development server:
 ```bash
 yarn dev
 ```
 
-The application will be available at `http://localhost:3000`
+#### Backend
 
-## Development Scripts
+1. Navigate to the subnet directory:
+```bash
+cd src/subnet
+```
 
-### Backend
+2. Create and activate a virtual environment:
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
 
-- `python main.py` - Run the development server
-- `python -m pytest` - Run tests
-- `black .` - Format code
-- `flake8` - Lint code
+3. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
 
-### Frontend
+4. Initialize the database:
+```bash
+python init_db.py
+```
 
-- `yarn dev` - Start development server
-- `yarn build` - Build for production
-- `yarn test` - Run tests
-- `yarn lint` - Run ESLint
-- `yarn typecheck` - Check TypeScript types
-- `yarn storybook` - Start Storybook
+5. Start the server:
+```bash
+python main.py
+```
 
-## API Documentation
+## Project Structure
 
-Once the backend server is running, you can access:
-- Swagger UI: `http://localhost:8000/docs`
-- ReDoc: `http://localhost:8000/redoc`
+- `web/` - Next.js frontend application
+- `src/subnet/` - Python backend application
+  - Uses DuckDB for data storage
+  - Prepared for future PostgreSQL integration for authentication
+- `docker-compose.yml` - Docker Compose configuration
+
+## Database
+
+The project currently uses DuckDB for data storage, with the database file located at `src/subnet/datasets.db`. The database is persisted using Docker volumes.
+
+### Future Database Integration
+
+The project is designed to support PostgreSQL integration in the future, particularly for:
+- User authentication
+- Session management
+- Additional data storage needs
 
 ## Contributing
 
 1. Fork the repository
-2. Create your feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a new Pull Request
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
+

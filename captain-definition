@@ -1,4 +1,24 @@
 {
     "schemaVersion": 2,
-    "dockerfilePath": "./server/Dockerfile"
+    "dockerfilePath": "./docker-compose.yml",
+    "services": {
+        "frontend": {
+            "containerHttpPort": 3000,
+            "restartPolicy": "on-failure",
+            "envVars": {
+                "NEXT_PUBLIC_API_URL": {
+                    "value": "http://backend:8000"
+                }
+            }
+        },
+        "backend": {
+            "containerHttpPort": 8000,
+            "restartPolicy": "on-failure",
+            "envVars": {
+                "DATABASE_URL": {
+                    "value": "sqlite:///datasets.db"
+                }
+            }
+        }
+    }
 }
