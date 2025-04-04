@@ -1,4 +1,5 @@
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional, ContextManager
+from contextlib import contextmanager
 from models import (
     TextDB,
     Category,
@@ -16,26 +17,52 @@ import numpy as np
 import logging
 import asyncio
 from sqlalchemy.orm import Session
-from sklearn.cluster import KMeans, AgglomerativeClustering
+from sklearn.cluster import AgglomerativeClustering
 from utils.database import get_duckdb_connection
+import gc
+import os
+import time
 
 logger = logging.getLogger(__name__)
 
 # Constants
-DISTANCE_THRESHOLD = 0.7  # Increased to create more general categories
-MIN_CLUSTER_SIZE = 2  # Minimum size for a cluster
+MIN_CLUSTER_SIZE = 5  # Reduced for more granular clusters
+MIN_SAMPLES = 3  # Minimum samples for HDBSCAN
+CLUSTER_SELECTION_EPS = 0.05  # Epsilon for cluster selection
+BATCH_SIZE = 512  # Batch size for processing
+MAX_RETRIES = 3
+RETRY_DELAY = 1  # seconds
 
 
-async def cluster_texts(
-    texts: List[str], db: Session, dataset_id: int
-) -> Tuple[List[Category], List[Subcluster]]:
-    """
-    Cluster texts into hierarchical categories and subclusters.
-    Returns both categories and their subclusters.
-    """
+@contextmanager
+def retry_on_lock(
+    max_retries: int = MAX_RETRIES, delay: float = RETRY_DELAY
+) -> ContextManager:
+    """Context manager that retries operations on database lock conflicts."""
+    attempt = 0
+    while True:
+        try:
+            with get_duckdb_connection() as conn:
+                yield conn
+                break
+        except Exception as e:
+            attempt += 1
+            if attempt >= max_retries:
+                logger.error(f"Failed after {max_retries} attempts: {str(e)}")
+                raise
+            if "Conflicting lock" in str(e):
+                logger.warning(
+                    f"Database locked, retrying in {delay} seconds (attempt {attempt}/{max_retries})"
+                )
+                time.sleep(delay)
+            else:
+                raise
+
+
+def cleanup_dataset_data(dataset_id: int) -> None:
+    """Clean up existing data for a dataset with retry logic."""
     try:
-        # Clean up existing data for this dataset
-        with get_duckdb_connection() as cleanup_conn:
+        with retry_on_lock() as cleanup_conn:
             # First delete text_clusters entries
             cleanup_conn.execute(
                 """
@@ -84,84 +111,95 @@ async def cluster_texts(
                 """,
                 [dataset_id],
             )
+    except Exception as e:
+        logger.error(f"Failed to cleanup dataset data: {str(e)}")
+        raise
+
+
+async def cluster_texts(
+    texts: List[str], db: Session, dataset_id: int
+) -> Tuple[List[Category], List[Subcluster]]:
+    """
+    Cluster texts into hierarchical categories and subclusters using HDBSCAN.
+    Returns both categories and their subclusters.
+    """
+    try:
+        # Clean up existing data
+        cleanup_dataset_data(dataset_id)
 
         # Insert or update texts in the database
-        with get_duckdb_connection() as insert_conn:
-            # First check if dataset_id column exists
-            columns = insert_conn.execute("DESCRIBE texts").fetchall()
-            column_names = [col[0] for col in columns]
+        try:
+            with retry_on_lock() as insert_conn:
+                # First check if dataset_id column exists
+                columns = insert_conn.execute("DESCRIBE texts").fetchall()
+                column_names = [col[0] for col in columns]
 
-            if "dataset_id" not in column_names:
-                insert_conn.execute("ALTER TABLE texts ADD COLUMN dataset_id INTEGER")
-
-            # Insert texts with ON CONFLICT DO NOTHING to handle duplicates
-            for text in texts:
-                insert_conn.execute(
-                    """
-                    INSERT INTO texts (text, dataset_id)
-                    SELECT ?, ?
-                    WHERE NOT EXISTS (
-                        SELECT 1 FROM texts 
-                        WHERE text = ? AND dataset_id = ?
+                if "dataset_id" not in column_names:
+                    insert_conn.execute(
+                        "ALTER TABLE texts ADD COLUMN dataset_id INTEGER"
                     )
-                    """,
-                    [text, dataset_id, text, dataset_id],
-                )
+
+                # Insert texts with ON CONFLICT DO NOTHING to handle duplicates
+                for text in texts:
+                    insert_conn.execute(
+                        """
+                        INSERT INTO texts (text, dataset_id)
+                        SELECT ?, ?
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM texts 
+                            WHERE text = ? AND dataset_id = ?
+                        )
+                        """,
+                        [text, dataset_id, text, dataset_id],
+                    )
+        except Exception as e:
+            logger.error(f"Failed to insert texts: {str(e)}")
+            raise
 
         # Get embeddings for all texts
         embeddings = await vectorize_texts(texts)
+        embeddings_array = np.array(embeddings, dtype=np.float32)
 
-        # First level clustering for major categories (more general)
-        clustering = AgglomerativeClustering(
-            n_clusters=None,
-            distance_threshold=DISTANCE_THRESHOLD,
-            metric="cosine",
-            linkage="average",  # Changed to average for more balanced clusters
+        # First level clustering for major categories using HDBSCAN
+        clusterer = hdbscan.HDBSCAN(
+            min_cluster_size=MIN_CLUSTER_SIZE,
+            min_samples=MIN_SAMPLES,
+            cluster_selection_epsilon=CLUSTER_SELECTION_EPS,
+            cluster_selection_method="leaf",
+            prediction_data=True,
         )
-        clusters = clustering.fit_predict(embeddings)
+        clusters = clusterer.fit_predict(embeddings_array)
+        probabilities = clusterer.probabilities_
 
-        # Get unique clusters and merge small clusters
+        # Handle noise points by assigning them to nearest clusters
+        noise_mask = clusters == -1
+        if np.any(noise_mask):
+            noise_vectors = embeddings_array[noise_mask]
+            if len(noise_vectors) > 0 and len(noise_vectors) < len(clusters):
+                noise_labels = hdbscan.membership_vector(clusterer, noise_vectors)
+                if noise_labels.ndim < 2:
+                    noise_labels = noise_labels.reshape(-1, 1)
+                clusters[noise_mask] = np.argmax(noise_labels, axis=1)
+                probabilities[noise_mask] = np.max(noise_labels, axis=1)
+
+        # Get unique clusters
         unique_clusters = np.unique(clusters)
-        cluster_sizes = [sum(clusters == c) for c in unique_clusters]
-
-        # If we have too many small clusters, try to merge them
-        if (
-            len([s for s in cluster_sizes if s < MIN_CLUSTER_SIZE])
-            > len(cluster_sizes) / 2
-        ):
-            # Reduce threshold to create larger clusters
-            clustering = AgglomerativeClustering(
-                n_clusters=None,
-                distance_threshold=DISTANCE_THRESHOLD
-                * 1.2,  # Increase threshold to merge more
-                metric="cosine",
-                linkage="average",
-            )
-            clusters = clustering.fit_predict(embeddings)
-            unique_clusters = np.unique(clusters)
-
         total_texts = len(texts)
 
         # Process each cluster
         for cluster_id in unique_clusters:
             # Get texts in this cluster
-            cluster_texts = [
-                text for i, text in enumerate(texts) if clusters[i] == cluster_id
-            ]
-            cluster_embeddings = [
-                emb for i, emb in enumerate(embeddings) if clusters[i] == cluster_id
-            ]
+            cluster_mask = clusters == cluster_id
+            cluster_texts = [text for i, text in enumerate(texts) if cluster_mask[i]]
+            cluster_probs = probabilities[cluster_mask]
 
-            # Generate category name and create category first
-            # For single-text clusters, still generate a proper category name
+            # Generate category name
             category_name = await derive_overarching_category(cluster_texts)
 
             # Ensure category name is not too long (max 2 words)
             if category_name and len(category_name.split()) > 2:
                 words = category_name.split()
-                # Try to keep the most meaningful words
                 if any(w.lower() in ["and", "or", "the", "a", "an"] for w in words):
-                    # Remove common words first
                     words = [
                         w
                         for w in words
@@ -169,6 +207,7 @@ async def cluster_texts(
                     ]
                 category_name = " ".join(words[:2])
 
+            # Create category
             with get_duckdb_connection() as category_conn:
                 category_conn.execute(
                     """
@@ -185,8 +224,8 @@ async def cluster_texts(
                 )
                 category_id = category_conn.fetchone()[0]
 
-            # For small clusters, still create a subcluster but with a more specific title
-            if len(cluster_texts) < MIN_CLUSTER_SIZE:
+            # For small clusters, create a single subcluster
+            if len(cluster_texts) < MIN_CLUSTER_SIZE * 2:
                 subcluster_title = await generate_semantic_title(cluster_texts)
                 with get_duckdb_connection() as subcluster_conn:
                     subcluster_conn.execute(
@@ -199,46 +238,66 @@ async def cluster_texts(
                             category_id,
                             subcluster_title,
                             len(cluster_texts),
-                            100.0,  # 100% since it's the only subcluster
+                            100.0,
                         ],
                     )
                     subcluster_id = subcluster_conn.fetchone()[0]
 
-                # Insert text cluster relationships
+                # Insert text cluster relationships with probabilities
                 with get_duckdb_connection() as text_cluster_conn:
-                    for text in cluster_texts:
+                    for text, prob in zip(cluster_texts, cluster_probs):
                         text_cluster_conn.execute(
                             """
                             INSERT INTO text_clusters (text_id, subcluster_id, membership_score)
-                            SELECT t.id, ?, 1.0
+                            SELECT t.id, ?, ?
                             FROM texts t
                             WHERE t.dataset_id = ? AND t.text = ?
                             ON CONFLICT (text_id, subcluster_id) 
-                            DO UPDATE SET membership_score = 1.0
+                            DO UPDATE SET membership_score = ?
                             """,
-                            [subcluster_id, dataset_id, text],
+                            [subcluster_id, float(prob), dataset_id, text, float(prob)],
                         )
                 continue
 
-            # Perform subclustering with a tighter threshold for more specific groups
-            subclustering = AgglomerativeClustering(
-                n_clusters=None,
-                distance_threshold=DISTANCE_THRESHOLD
-                * 0.6,  # More granular subclusters
-                metric="cosine",
-                linkage="complete",  # Use complete linkage for tighter subclusters
+            # For larger clusters, perform subclustering
+            cluster_embeddings = embeddings_array[cluster_mask]
+            subclusterer = hdbscan.HDBSCAN(
+                min_cluster_size=MIN_SAMPLES,
+                min_samples=MIN_SAMPLES - 1,
+                cluster_selection_epsilon=CLUSTER_SELECTION_EPS,
+                cluster_selection_method="leaf",
+                prediction_data=True,
             )
-            subclusters = subclustering.fit_predict(cluster_embeddings)
+            subclusters = subclusterer.fit_predict(cluster_embeddings)
+            subcluster_probs = subclusterer.probabilities_
+
+            # Handle noise points in subclusters
+            subcluster_noise_mask = subclusters == -1
+            if np.any(subcluster_noise_mask):
+                subcluster_noise_vectors = cluster_embeddings[subcluster_noise_mask]
+                if len(subcluster_noise_vectors) > 0 and len(
+                    subcluster_noise_vectors
+                ) < len(subclusters):
+                    subcluster_noise_labels = hdbscan.membership_vector(
+                        subclusterer, subcluster_noise_vectors
+                    )
+                    if subcluster_noise_labels.ndim < 2:
+                        subcluster_noise_labels = subcluster_noise_labels.reshape(-1, 1)
+                    subclusters[subcluster_noise_mask] = np.argmax(
+                        subcluster_noise_labels, axis=1
+                    )
+                    subcluster_probs[subcluster_noise_mask] = np.max(
+                        subcluster_noise_labels, axis=1
+                    )
 
             # Process each subcluster
             unique_subclusters = np.unique(subclusters)
             for subcluster_id in unique_subclusters:
-                # Get texts in this subcluster
+                subcluster_mask = subclusters == subcluster_id
                 subcluster_texts = [
-                    text
-                    for i, text in enumerate(cluster_texts)
-                    if subclusters[i] == subcluster_id
+                    text for i, text in enumerate(cluster_texts) if subcluster_mask[i]
                 ]
+                subcluster_probs_filtered = subcluster_probs[subcluster_mask]
 
                 # Generate subcluster title
                 subcluster_title = await generate_semantic_title(subcluster_texts)
@@ -260,19 +319,19 @@ async def cluster_texts(
                     )
                     subcluster_id = subcluster_conn.fetchone()[0]
 
-                # Insert text cluster relationships
+                # Insert text cluster relationships with probabilities
                 with get_duckdb_connection() as text_cluster_conn:
-                    for text in subcluster_texts:
+                    for text, prob in zip(subcluster_texts, subcluster_probs_filtered):
                         text_cluster_conn.execute(
                             """
                             INSERT INTO text_clusters (text_id, subcluster_id, membership_score)
-                            SELECT t.id, ?, 1.0
+                            SELECT t.id, ?, ?
                             FROM texts t
                             WHERE t.dataset_id = ? AND t.text = ?
                             ON CONFLICT (text_id, subcluster_id) 
-                            DO UPDATE SET membership_score = 1.0
+                            DO UPDATE SET membership_score = ?
                             """,
-                            [subcluster_id, dataset_id, text],
+                            [subcluster_id, float(prob), dataset_id, text, float(prob)],
                         )
 
         # Update dataset clustering status
