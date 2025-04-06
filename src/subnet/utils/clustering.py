@@ -139,8 +139,8 @@ async def create_single_subcluster(
         with retry_on_lock() as subcluster_conn:
             subcluster_conn.execute(
                 """
-                INSERT INTO subclusters (category_id, title, row_count, percentage, version)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO subclusters (category_id, title, row_count, percentage)
+                VALUES (?, ?, ?, ?)
                 RETURNING id
                 """,
                 [
@@ -148,7 +148,6 @@ async def create_single_subcluster(
                     subcluster_title or "General",  # Fallback title
                     len(texts),
                     100.0,  # Takes 100% of the category
-                    version,
                 ],
             )
             subcluster_db_id = subcluster_conn.fetchone()[0]
@@ -203,9 +202,6 @@ async def cluster_texts(
     final_categories = []
     final_subclusters = []
     try:
-        # Clean up existing data
-        cleanup_dataset_data(dataset_id)
-
         # Insert or update texts
         try:
             with retry_on_lock() as insert_conn:
@@ -385,12 +381,15 @@ async def cluster_texts(
                                 if total_texts > 0
                                 else 0
                             ),
-                            version,
+                            version,  # Add version value
                         ],
                     )
                     result = category_conn.fetchone()
                     if result:
                         category_db_id = result[0]
+                        logger.info(
+                            f"Inserted category ID {category_db_id} with name '{category_name}' for dataset {dataset_id}, version {version}."
+                        )  # Added Log
                     else:
                         raise Exception("Category insertion did not return an ID.")
             except Exception as e:
@@ -570,12 +569,15 @@ async def cluster_texts(
                                             if len(cluster_texts) > 0
                                             else 0
                                         ),
-                                        version,
+                                        version,  # Add version value
                                     ],
                                 )
                                 sub_result = subcluster_conn.fetchone()
                                 if sub_result:
                                     subcluster_db_id = sub_result[0]
+                                    logger.info(
+                                        f"Inserted subcluster ID {subcluster_db_id} with title '{subcluster_title}' for category {category_db_id}, dataset {dataset_id}, version {version}."
+                                    )  # Added Log
                                 else:
                                     raise Exception(
                                         "Subcluster insertion did not return an ID."

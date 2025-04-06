@@ -29,6 +29,12 @@ from utils.database import (
 )
 from openai import OpenAI
 
+# Force reload of clustering module to get the updated function definition
+# with 4 parameters (texts, db, dataset_id, version)
+# import importlib   # REMOVED
+# import utils.clustering # REMOVED
+# importlib.reload(utils.clustering) # REMOVED
+
 # Import as different name to avoid conflicts
 from utils.clustering import cluster_texts as clustering_utils_cluster_texts
 from datetime import datetime
@@ -718,7 +724,14 @@ async def get_clusters(
             return {"status": "in_progress", "categories": []}
 
         if history.clustering_status == "failed":
-            return {"status": "failed", "categories": []}
+            # Return a proper error response with 500 status code
+            error_message = (
+                history.error_message or "Clustering failed for this version"
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=f"Clustering failed for version {version}: {error_message}",
+            )
 
         # Get categories and subclusters for this version
         categories = (
@@ -728,13 +741,42 @@ async def get_clusters(
         )
 
         if not categories:
-            return {"status": "completed", "categories": []}
+            # Check if there are any categories for this dataset at all
+            any_categories = (
+                db.query(Category).filter(Category.dataset_id == dataset_id).first()
+            )
+
+            if any_categories:
+                # There are categories for this dataset, but not for this version
+                available_versions = (
+                    db.query(Category.version)
+                    .filter(Category.dataset_id == dataset_id)
+                    .distinct()
+                    .all()
+                )
+                available_versions = [v[0] for v in available_versions]
+                return {
+                    "status": "completed",
+                    "categories": [],
+                    "message": f"No categories found for version {version}. Available versions: {available_versions}",
+                }
+            else:
+                # No categories at all for this dataset
+                return {
+                    "status": "completed",
+                    "categories": [],
+                    "message": "No categories found for this dataset. Try running clustering first.",
+                }
 
         # Get subclusters for each category
         result = []
         for category in categories:
             subclusters = (
-                db.query(Subcluster).filter(Subcluster.category_id == category.id).all()
+                db.query(Subcluster)
+                .filter(
+                    Subcluster.category_id == category.id, Subcluster.version == version
+                )
+                .all()
             )
 
             # Get texts for each subcluster
