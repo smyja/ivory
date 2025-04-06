@@ -2,10 +2,10 @@ import { useState, useEffect } from 'react';
 import { Box, UnstyledButton, Collapse, Group, rem } from '@mantine/core';
 import { usePathname, useRouter } from 'next/navigation';
 import {
-  IconBellRinging,
-  IconFingerprint,
+  IconHome,
+  IconBrain,
   IconSettings,
-  Icon2fa,
+  IconPlugConnected,
   IconMessageChatbot,
   IconFiles,
   IconChevronRight,
@@ -24,9 +24,9 @@ interface NavItem {
 }
 
 const data: NavItem[] = [
-  { link: '/dashboard', label: 'Home', icon: IconBellRinging },
+  { link: '/dashboard', label: 'Home', icon: IconHome },
   { link: '/dashboard/chat', label: 'Chat', icon: IconMessageChatbot },
-  { link: '/dashboard/connectors', label: 'Connectors', icon: Icon2fa },
+  { link: '/dashboard/connectors', label: 'Connectors', icon: IconPlugConnected },
   { link: '/dashboard/documents', label: 'Documents', icon: IconFiles },
   {
     label: 'Datasets',
@@ -37,7 +37,7 @@ const data: NavItem[] = [
       { link: '/dashboard/datasets/cluster/history', label: 'Clustering History' },
     ],
   },
-  { link: '/dashboard/insight', label: 'Insight', icon: IconFingerprint },
+  { link: '/dashboard/insight', label: 'Insight', icon: IconBrain },
   { link: '/dashboard/settings', label: 'Settings', icon: IconSettings },
 ];
 
