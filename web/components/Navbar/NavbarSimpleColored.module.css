@@ -71,7 +71,8 @@
 .control {
   display: flex;
   align-items: center;
-  width: 100%; /* Ensure the button covers the entire width */
+  width: 100%;
+  /* Ensure the button covers the entire width */
   padding: var(--mantine-spacing-xs) var(--mantine-spacing-sm);
   border-radius: var(--mantine-radius-sm);
   color: light-dark(var(--mantine-color-gray-7), var(--mantine-color-dark-1));
@@ -104,12 +105,12 @@
 
 .subLinks .link {
   font-size: 0.9rem;
-  padding-left: 1.5rem; /* Ensure padding is consistent with other links */
+  padding-left: 1.5rem;
+  /* Ensure padding is consistent with other links */
   padding: var(--mantine-spacing-xs) var(--mantine-spacing-sm);
   display: flex;
   align-items: center;
   transition: background-color 0.3s ease;
-  border-left: 1px solid light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-4));
 }
 
 .subLinks .link:hover {
@@ -125,4 +126,11 @@
 
 .link.active .linkIcon {
   color: var(--mantine-color-dark-light-color);
+}
+
+/* Ensure no underlines on any links within the sidebar */
+.navbarMain a,
+.footer a {
+  text-decoration: none !important;
+  /* Use !important to override defaults */
 }

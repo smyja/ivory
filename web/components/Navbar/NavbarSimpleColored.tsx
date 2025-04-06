@@ -97,6 +97,7 @@ export function NavbarSimpleColored() {
                       stroke={1.5}
                       style={{
                         transform: openGroup === item.label ? 'rotate(90deg)' : 'none',
+                        marginLeft: rem(35)
                       }}
                     />
                   </Group>
