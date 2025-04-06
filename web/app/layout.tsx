@@ -1,6 +1,7 @@
 'use client';
 import "@mantine/core/styles.css";
-import '@mantine/nprogress/styles.css';
+import '@mantine/notifications/styles.css';
+import '@mantine/dropzone/styles.css';
 import React from "react";
 import { MantineProvider, ColorSchemeScript } from "@mantine/core";
 import { ModalsProvider } from '@mantine/modals';
@@ -11,6 +12,7 @@ import classes from "@styles/global.module.css"
 import { Notifications } from '@mantine/notifications';
 import '@mantine/notifications/styles.css';
 import '@mantine/dropzone/styles.css';
+import NextTopLoader from 'nextjs-toploader';
 
 const satoshi = localFont({
   src: [
@@ -30,13 +32,13 @@ const satoshi = localFont({
       path: '../public/fonts/Satoshi-Bold.woff2',
       weight: '700',
     },
-  
+
 
   ],
 });
 export default function RootLayout({ children }: { children: any }) {
   return (
-    
+
 
     <html lang="en">
       <head>
@@ -49,18 +51,18 @@ export default function RootLayout({ children }: { children: any }) {
         />
       </head>
       <body className={classes.body}>
-        
-        <MantineProvider theme={theme}>  
-      
-        <ModalsProvider>
-          
-        <Notifications  autoClose={4000} position="bottom-right" zIndex={1000} />
-     
-          {children}
-        </ModalsProvider>
+        <NextTopLoader color="#2299DD" />
+        <MantineProvider theme={theme}>
+
+          <ModalsProvider>
+
+            <Notifications autoClose={4000} position="bottom-right" zIndex={1000} />
+
+            {children}
+          </ModalsProvider>
         </MantineProvider>
       </body>
     </html>
-  
+
   );
 }

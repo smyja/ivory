@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Box, UnstyledButton, Collapse, Group, rem } from '@mantine/core';
 import { usePathname, useRouter } from 'next/navigation';
-import { NavigationProgress, nprogress } from '@mantine/nprogress';
 import {
   IconBellRinging,
   IconFingerprint,
@@ -57,24 +56,18 @@ export function NavbarSimpleColored() {
   const [openGroup, setOpenGroup] = useState('');
 
   useEffect(() => {
-    nprogress.reset();
     setActive(findLabelByPath(pathname));
-    return () => {
-      nprogress.complete();
-    };
   }, [pathname]);
 
   const handleLinkClick = (item: NavItem) => {
     setActive(item.label);
     if (item.link) {
       router.push(item.link);
-      nprogress.set(50);
     }
   };
 
   return (
     <>
-      <NavigationProgress color="red" />
       <div className={classes.navbarMain}>
         {data.map((item) => {
           if (item.links) {
