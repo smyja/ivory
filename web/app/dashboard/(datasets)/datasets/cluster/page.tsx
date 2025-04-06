@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Group, Paper, Text, Title, Container, Loader, Alert, Card, Pagination, Badge, Grid } from '@mantine/core';
+import { Group, Paper, Text, Title, Container, Loader, Alert, Card, Pagination, Badge, Grid, Select } from '@mantine/core';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { IconArrowUpRight, IconArrowDownRight } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
@@ -40,12 +40,15 @@ export default function ClusterView() {
     const searchParams = useSearchParams();
     const router = useRouter();
     const datasetId = searchParams.get('id');
+    const versionParam = searchParams.get('version');
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [categories, setCategories] = useState<Category[]>([]);
     const [titlingStatus, setTitlingStatus] = useState<TitlingStatus>({});
     const [currentPage, setCurrentPage] = useState<{ [key: number]: number }>({});
     const [subclusterPages, setSubclusterPages] = useState<{ [key: number]: number }>({});
+    const [versions, setVersions] = useState<{ id: number; version: number; created_at: string }[]>([]);
+    const [selectedVersion, setSelectedVersion] = useState<number | null>(versionParam ? parseInt(versionParam) : null);
     const ITEMS_PER_PAGE = 6;
     const SUBCLUSTERS_PER_PAGE = 5;
 
@@ -159,9 +162,12 @@ export default function ClusterView() {
 
     const fetchClusters = async () => {
         try {
-            const response = await fetch(
-                `${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}/clusters`
-            );
+            const url = new URL(`${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}/clusters`);
+            if (selectedVersion) {
+                url.searchParams.append('version', selectedVersion.toString());
+            }
+
+            const response = await fetch(url.toString());
             if (!response.ok) {
                 throw new Error('Failed to fetch clusters');
             }
@@ -223,11 +229,32 @@ export default function ClusterView() {
         }
     };
 
+    const fetchVersions = async () => {
+        try {
+            const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}/clustering/versions`);
+            if (!response.ok) {
+                throw new Error('Failed to fetch clustering versions');
+            }
+            const data = await response.json();
+            setVersions(data);
+
+            // If no version is selected, select the latest one
+            if (!selectedVersion && data.length > 0) {
+                const latestVersion = data[0].version;
+                setSelectedVersion(latestVersion);
+                router.push(`/dashboard/datasets/cluster?id=${datasetId}&version=${latestVersion}`);
+            }
+        } catch (error) {
+            console.error('Error fetching versions:', error);
+        }
+    };
+
     useEffect(() => {
         if (datasetId) {
+            fetchVersions();
             fetchClusters();
         }
-    }, [datasetId]);
+    }, [datasetId, selectedVersion]);
 
     const getPagedSubclusters = (subclusters: Subcluster[], categoryId: number) => {
         const page = currentPage[categoryId] || 1;
@@ -336,39 +363,67 @@ export default function ClusterView() {
     return (
         <Container size="xl" py="xl">
             <div className={classes.root}>
-                {categories.map((category) => {
-                    const pagedSubclusters = getPagedSubclusters(category.subclusters, category.id);
-                    const totalPages = Math.ceil(category.subclusters.length / ITEMS_PER_PAGE);
+                {versions.length > 0 && (
+                    <Group mb="md" justify="space-between">
+                        <Text fw={500}>Clustering Version:</Text>
+                        <Select
+                            value={selectedVersion?.toString() || ''}
+                            onChange={(value) => {
+                                if (value) {
+                                    setSelectedVersion(parseInt(value));
+                                    router.push(`/dashboard/datasets/cluster?id=${datasetId}&version=${value}`);
+                                }
+                            }}
+                            data={versions.map(v => ({ value: v.version.toString(), label: `Version ${v.version} (${new Date(v.created_at).toLocaleString()})` }))}
+                            style={{ width: '300px' }}
+                        />
+                    </Group>
+                )}
 
-                    return (
-                        <Card withBorder shadow="sm" radius="md" key={category.id} mb="lg" className={classes.categoryCard}>
-                            <Group align="flex-start" wrap="nowrap">
-                                <div className={classes.categoryInfo}>
-                                    <div>
-                                        <Title order={3} className={classes.categoryTitle}>
-                                            {category.name || `Category ${category.id}`}
-                                        </Title>
-                                        <Text className={classes.categoryStats}>
-                                            {category.subclusters.length} subclusters
-                                        </Text>
-                                    </div>
-                                    <div>
-                                        <Text size="lg" fw={700} className={classes.value}>
-                                            {category.total_rows.toLocaleString()}
-                                        </Text>
-                                        <Text className={classes.categoryStats}>
-                                            {category.percentage.toFixed(2)}% of total rows
-                                        </Text>
-                                    </div>
-                                </div>
+                {categories.length === 0 ? (
+                    <Alert color="blue" title="No Clusters Found">
+                        There are no clusters available for this dataset. This could mean either:
+                        <ul style={{ marginTop: '10px' }}>
+                            <li>The clustering process has not been started yet</li>
+                            <li>The clustering process is still in progress</li>
+                            <li>No clusters were found in the dataset</li>
+                        </ul>
+                    </Alert>
+                ) : (
+                    categories.map((category) => {
+                        const pagedSubclusters = getPagedSubclusters(category.subclusters, category.id);
+                        const totalPages = Math.ceil(category.subclusters.length / ITEMS_PER_PAGE);
 
-                                <div className={classes.subclusterContainer}>
-                                    {renderSubclusters(category.subclusters, category.id)}
-                                </div>
-                            </Group>
-                        </Card>
-                    );
-                })}
+                        return (
+                            <Card withBorder shadow="sm" radius="md" key={category.id} mb="lg" className={classes.categoryCard}>
+                                <Group align="flex-start" wrap="nowrap">
+                                    <div className={classes.categoryInfo}>
+                                        <div>
+                                            <Title order={3} className={classes.categoryTitle}>
+                                                {category.name || `Category ${category.id}`}
+                                            </Title>
+                                            <Text className={classes.categoryStats}>
+                                                {category.subclusters.length} subclusters
+                                            </Text>
+                                        </div>
+                                        <div>
+                                            <Text size="lg" fw={700} className={classes.value}>
+                                                {category.total_rows.toLocaleString()}
+                                            </Text>
+                                            <Text className={classes.categoryStats}>
+                                                {category.percentage.toFixed(2)}% of total rows
+                                            </Text>
+                                        </div>
+                                    </div>
+
+                                    <div className={classes.subclusterContainer}>
+                                        {renderSubclusters(category.subclusters, category.id)}
+                                    </div>
+                                </Group>
+                            </Card>
+                        );
+                    })
+                )}
             </div>
         </Container>
     );

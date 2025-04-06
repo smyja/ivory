@@ -120,7 +120,11 @@ def cleanup_dataset_data(dataset_id: int) -> None:
 
 
 async def create_single_subcluster(
-    category_db_id: int, texts: List[str], probs: np.ndarray, dataset_id: int
+    category_db_id: int,
+    texts: List[str],
+    probs: np.ndarray,
+    dataset_id: int,
+    version: int,
 ):
     """Helper function to create a single subcluster when subclustering is skipped or fails."""
     if not texts:
@@ -135,8 +139,8 @@ async def create_single_subcluster(
         with retry_on_lock() as subcluster_conn:
             subcluster_conn.execute(
                 """
-                INSERT INTO subclusters (category_id, title, row_count, percentage)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO subclusters (category_id, title, row_count, percentage, version)
+                VALUES (?, ?, ?, ?, ?)
                 RETURNING id
                 """,
                 [
@@ -144,6 +148,7 @@ async def create_single_subcluster(
                     subcluster_title or "General",  # Fallback title
                     len(texts),
                     100.0,  # Takes 100% of the category
+                    version,
                 ],
             )
             subcluster_db_id = subcluster_conn.fetchone()[0]
@@ -181,12 +186,19 @@ async def create_single_subcluster(
 
 
 async def cluster_texts(
-    texts: List[str], db: Session, dataset_id: int
+    texts: List[str], db: Session, dataset_id: int, version: int = 1
 ) -> Tuple[List[Category], List[Subcluster]]:
     """
-    Cluster texts into hierarchical categories and subclusters using HDBSCAN.
-    Relies on semantic embeddings and HDBSCAN's ability to find structure.
-    Returns both categories and their subclusters.
+    Cluster texts into categories and subclusters.
+
+    Args:
+        texts: List of texts to cluster
+        db: Database session
+        dataset_id: ID of the dataset
+        version: Version number for this clustering attempt
+
+    Returns:
+        Tuple of (categories, subclusters)
     """
     final_categories = []
     final_subclusters = []
@@ -360,8 +372,8 @@ async def cluster_texts(
                 with retry_on_lock() as category_conn:
                     category_conn.execute(
                         """
-                        INSERT INTO categories (dataset_id, name, total_rows, percentage)
-                        VALUES (?, ?, ?, ?)
+                        INSERT INTO categories (dataset_id, name, total_rows, percentage, version)
+                        VALUES (?, ?, ?, ?, ?)
                         RETURNING id
                         """,
                         [
@@ -373,6 +385,7 @@ async def cluster_texts(
                                 if total_texts > 0
                                 else 0
                             ),
+                            version,
                         ],
                     )
                     result = category_conn.fetchone()
@@ -486,7 +499,11 @@ async def cluster_texts(
                             f"All points ({num_sub_noise}) were noise in subclustering for category {category_db_id}. Creating single subcluster."
                         )
                         await create_single_subcluster(
-                            category_db_id, cluster_texts, cluster_probs, dataset_id
+                            category_db_id,
+                            cluster_texts,
+                            cluster_probs,
+                            dataset_id,
+                            version,
                         )
                         del subclusterer  # Free memory
                         gc.collect()
@@ -538,8 +555,8 @@ async def cluster_texts(
                             with retry_on_lock() as subcluster_conn:
                                 subcluster_conn.execute(
                                     """
-                                    INSERT INTO subclusters (category_id, title, row_count, percentage)
-                                    VALUES (?, ?, ?, ?)
+                                    INSERT INTO subclusters (category_id, title, row_count, percentage, version)
+                                    VALUES (?, ?, ?, ?, ?)
                                     RETURNING id
                                     """,
                                     [
@@ -553,6 +570,7 @@ async def cluster_texts(
                                             if len(cluster_texts) > 0
                                             else 0
                                         ),
+                                        version,
                                     ],
                                 )
                                 sub_result = subcluster_conn.fetchone()
@@ -604,7 +622,11 @@ async def cluster_texts(
                     )
                     # Fallback: Create a single subcluster for the whole category if subclustering fails
                     await create_single_subcluster(
-                        category_db_id, cluster_texts, cluster_probs, dataset_id
+                        category_db_id,
+                        cluster_texts,
+                        cluster_probs,
+                        dataset_id,
+                        version,
                     )
 
             else:
@@ -613,7 +635,7 @@ async def cluster_texts(
                     f"Creating single subcluster for category {category_db_id} (cluster {cluster_id}), dataset {dataset_id} as it's too small or failed checks."
                 )
                 await create_single_subcluster(
-                    category_db_id, cluster_texts, cluster_probs, dataset_id
+                    category_db_id, cluster_texts, cluster_probs, dataset_id, version
                 )
 
             del cluster_embeddings  # Clean up memory

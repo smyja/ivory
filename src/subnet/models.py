@@ -70,6 +70,7 @@ class Category(Base):
     name = Column(String, nullable=False)
     total_rows = Column(Integer, nullable=False)
     percentage = Column(Float, nullable=False)
+    version = Column(Integer, nullable=False, default=1)
 
     # Relationships
     dataset = relationship("DatasetMetadata", back_populates="categories")
@@ -89,6 +90,7 @@ class Subcluster(Base):
     title = Column(String, nullable=False)
     row_count = Column(Integer, nullable=False)
     percentage = Column(Float, nullable=False)
+    version = Column(Integer, nullable=False, default=1)
 
     # Relationships
     category = relationship("Category", back_populates="subclusters")
@@ -156,6 +158,7 @@ class ClusteringHistory(Base):
     created_at = Column(DateTime(timezone=False), nullable=False)
     completed_at = Column(DateTime(timezone=False))
     error_message = Column(String)
+    clustering_version = Column(Integer, nullable=False, default=1)
 
     # Relationship with DatasetMetadata
     dataset = relationship("DatasetMetadata", back_populates="clustering_attempts")

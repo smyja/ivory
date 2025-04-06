@@ -36,6 +36,7 @@ import duckdb
 import numpy as np
 from sklearn.cluster import AgglomerativeClustering
 from utils.scan_datasets import scan_datasets_folder
+from sqlalchemy import func
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -570,12 +571,22 @@ def get_dataset_data(dataset_id: int, db: Session = Depends(get_db)):
 async def process_clustering(dataset_id: int, db: Session = Depends(get_db)):
     """Process clustering for a dataset."""
     try:
+        # Get the latest version number for this dataset
+        latest_version = (
+            db.query(func.max(ClusteringHistory.clustering_version))
+            .filter(ClusteringHistory.dataset_id == dataset_id)
+            .scalar()
+            or 0
+        )
+        new_version = latest_version + 1
+
         # Create clustering history entry
         history = ClusteringHistory(
             dataset_id=dataset_id,
             clustering_status="in_progress",
             titling_status="not_started",
             created_at=datetime.utcnow(),
+            clustering_version=new_version,
         )
         db.add(history)
         db.commit()
@@ -609,7 +620,7 @@ async def process_clustering(dataset_id: int, db: Session = Depends(get_db)):
 
             # Perform clustering
             categories, subclusters = await clustering_utils_cluster_texts(
-                texts, db, dataset_id
+                texts, db, dataset_id, new_version
             )
 
             # Update history
@@ -627,6 +638,7 @@ async def process_clustering(dataset_id: int, db: Session = Depends(get_db)):
                 "message": "Clustering completed successfully",
                 "categories": len(categories),
                 "subclusters": len(subclusters),
+                "version": new_version,
             }
 
         except Exception as e:
@@ -668,119 +680,95 @@ async def get_clustering_status(dataset_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{dataset_id}/clusters")
-async def get_clusters(dataset_id: int, db: Session = Depends(get_db)):
-    """Get the clustering results for a dataset."""
+async def get_clusters(
+    dataset_id: int, version: Optional[int] = None, db: Session = Depends(get_db)
+):
+    """Get clusters for a dataset."""
     try:
+        # If version is not specified, get the latest version
+        if version is None:
+            latest_version = (
+                db.query(func.max(ClusteringHistory.clustering_version))
+                .filter(
+                    ClusteringHistory.dataset_id == dataset_id,
+                    ClusteringHistory.clustering_status == "completed",
+                )
+                .scalar()
+            )
+
+            if latest_version is None:
+                return {"status": "not_started", "categories": []}
+
+            version = latest_version
+
         # Check if clustering is in progress
-        dataset = (
-            db.query(DatasetMetadata).filter(DatasetMetadata.id == dataset_id).first()
+        history = (
+            db.query(ClusteringHistory)
+            .filter(
+                ClusteringHistory.dataset_id == dataset_id,
+                ClusteringHistory.clustering_version == version,
+            )
+            .first()
         )
-        if not dataset:
-            raise HTTPException(
-                status_code=404, detail=f"Dataset with id {dataset_id} not found"
+
+        if not history:
+            return {"status": "not_started", "categories": []}
+
+        if history.clustering_status == "in_progress":
+            return {"status": "in_progress", "categories": []}
+
+        if history.clustering_status == "failed":
+            return {"status": "failed", "categories": []}
+
+        # Get categories and subclusters for this version
+        categories = (
+            db.query(Category)
+            .filter(Category.dataset_id == dataset_id, Category.version == version)
+            .all()
+        )
+
+        if not categories:
+            return {"status": "completed", "categories": []}
+
+        # Get subclusters for each category
+        result = []
+        for category in categories:
+            subclusters = (
+                db.query(Subcluster).filter(Subcluster.category_id == category.id).all()
             )
 
-        # If clustering hasn't been done yet, return not_started status
-        if not dataset.is_clustered:
-            return {"status": "not_started"}
+            # Get texts for each subcluster
+            subcluster_data = []
+            for subcluster in subclusters:
+                texts = (
+                    db.query(TextDB)
+                    .join(TextCluster, TextDB.id == TextCluster.text_id)
+                    .filter(TextCluster.subcluster_id == subcluster.id)
+                    .all()
+                )
 
-        # Query for categories
-        categories = []
-        total_texts = 0
+                subcluster_data.append(
+                    {
+                        "id": subcluster.id,
+                        "title": subcluster.title,
+                        "row_count": subcluster.row_count,
+                        "percentage": subcluster.percentage,
+                        "texts": [{"id": text.id, "text": text.text} for text in texts],
+                    }
+                )
 
-        try:
-            with get_duckdb_connection() as duckdb_conn:
-                # Get total texts count
-                total_texts = duckdb_conn.execute(
-                    """
-                    SELECT COUNT(*)
-                    FROM texts
-                    WHERE dataset_id = ?
-                    """,
-                    [dataset_id],
-                ).fetchone()[0]
-
-                # Get categories
-                categories_result = duckdb_conn.execute(
-                    """
-                    SELECT c.id, c.name, c.total_rows, c.percentage
-                    FROM categories c
-                    WHERE c.dataset_id = ?
-                    ORDER BY c.total_rows DESC
-                    """,
-                    [dataset_id],
-                ).fetchall()
-
-                for cat_id, name, total_rows, percentage in categories_result:
-                    # Get subclusters for this category
-                    subclusters_result = duckdb_conn.execute(
-                        """
-                        SELECT s.id, s.title, s.row_count, s.percentage
-                        FROM subclusters s
-                        WHERE s.category_id = ?
-                        ORDER BY s.row_count DESC
-                        """,
-                        [cat_id],
-                    ).fetchall()
-
-                    subclusters = []
-                    for sub_id, title, row_count, sub_percentage in subclusters_result:
-                        # Get texts for this subcluster
-                        texts_result = duckdb_conn.execute(
-                            """
-                            SELECT tc.text_id, t.text, tc.membership_score
-                            FROM text_clusters tc
-                            JOIN texts t ON tc.text_id = t.id
-                            WHERE tc.subcluster_id = ?
-                            ORDER BY tc.membership_score DESC
-                            """,
-                            [sub_id],
-                        ).fetchall()
-
-                        texts = [
-                            {
-                                "text_id": text_id,
-                                "text": text,
-                                "membership_score": score,
-                            }
-                            for text_id, text, score in texts_result
-                        ]
-
-                        subclusters.append(
-                            {
-                                "id": sub_id,
-                                "title": title,
-                                "row_count": row_count,
-                                "percentage": sub_percentage,
-                                "texts": texts,
-                            }
-                        )
-
-                    categories.append(
-                        {
-                            "id": cat_id,
-                            "name": name,
-                            "total_rows": total_rows,
-                            "percentage": percentage,
-                            "subclusters": subclusters,
-                        }
-                    )
-
-        except Exception as e:
-            logger.exception(f"Error executing DuckDB queries: {str(e)}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Database error while fetching clusters: {str(e)}",
+            result.append(
+                {
+                    "id": category.id,
+                    "name": category.name,
+                    "total_rows": category.total_rows,
+                    "percentage": category.percentage,
+                    "subclusters": subcluster_data,
+                }
             )
 
-        return {
-            "status": "completed",
-            "total_texts": total_texts,
-            "categories": categories,
-        }
+        return {"status": "completed", "categories": result, "version": version}
 
-    except HTTPException as he:
-        raise he
     except Exception as e:
         logger.exception(f"Error getting clusters: {str(e)}")
         raise HTTPException(
@@ -792,27 +780,58 @@ async def get_clusters(dataset_id: int, db: Session = Depends(get_db)):
 async def get_clustering_history(db: Session = Depends(get_db)):
     """Get the clustering history for all datasets."""
     try:
-        history = (
-            db.query(ClusteringHistory)
-            .order_by(ClusteringHistory.created_at.desc())
-            .all()
-        )
+        # Check if clustering_version column exists
+        try:
+            # Try to query with clustering_version
+            history = (
+                db.query(ClusteringHistory)
+                .order_by(ClusteringHistory.created_at.desc())
+                .all()
+            )
 
-        return [
-            {
-                "id": entry.id,
-                "dataset_id": entry.dataset_id,
-                "dataset_name": entry.dataset.name if entry.dataset else "Unknown",
-                "clustering_status": entry.clustering_status,
-                "titling_status": entry.titling_status,
-                "created_at": entry.created_at.isoformat(),
-                "completed_at": (
-                    entry.completed_at.isoformat() if entry.completed_at else None
-                ),
-                "error_message": entry.error_message,
-            }
-            for entry in history
-        ]
+            return [
+                {
+                    "id": entry.id,
+                    "dataset_id": entry.dataset_id,
+                    "dataset_name": entry.dataset.name if entry.dataset else "Unknown",
+                    "clustering_status": entry.clustering_status,
+                    "titling_status": entry.titling_status,
+                    "created_at": entry.created_at.isoformat(),
+                    "completed_at": (
+                        entry.completed_at.isoformat() if entry.completed_at else None
+                    ),
+                    "error_message": entry.error_message,
+                    "clustering_version": entry.clustering_version,
+                }
+                for entry in history
+            ]
+        except Exception as e:
+            # If there's an error, it might be because the column doesn't exist
+            logger.warning(f"Error querying with clustering_version: {str(e)}")
+
+            # Fallback to query without clustering_version
+            history = (
+                db.query(ClusteringHistory)
+                .order_by(ClusteringHistory.created_at.desc())
+                .all()
+            )
+
+            return [
+                {
+                    "id": entry.id,
+                    "dataset_id": entry.dataset_id,
+                    "dataset_name": entry.dataset.name if entry.dataset else "Unknown",
+                    "clustering_status": entry.clustering_status,
+                    "titling_status": entry.titling_status,
+                    "created_at": entry.created_at.isoformat(),
+                    "completed_at": (
+                        entry.completed_at.isoformat() if entry.completed_at else None
+                    ),
+                    "error_message": entry.error_message,
+                    "clustering_version": 1,  # Default to version 1 for backward compatibility
+                }
+                for entry in history
+            ]
     except Exception as e:
         logger.error(f"Error getting clustering history: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -851,3 +870,62 @@ async def get_subcluster_texts(subcluster_id: int, db: Session = Depends(get_db)
         raise HTTPException(
             status_code=500, detail=f"Error retrieving subcluster texts: {str(e)}"
         )
+
+
+@router.get("/{dataset_id}/clustering/versions")
+async def get_clustering_versions(dataset_id: int, db: Session = Depends(get_db)):
+    """Get all clustering versions for a dataset."""
+    try:
+        # Check if clustering_version column exists
+        try:
+            # Try to query with clustering_version
+            versions = (
+                db.query(ClusteringHistory)
+                .filter(ClusteringHistory.dataset_id == dataset_id)
+                .order_by(ClusteringHistory.created_at.desc())
+                .all()
+            )
+
+            return [
+                {
+                    "id": version.id,
+                    "version": version.clustering_version,
+                    "status": version.clustering_status,
+                    "created_at": version.created_at.isoformat(),
+                    "completed_at": (
+                        version.completed_at.isoformat()
+                        if version.completed_at
+                        else None
+                    ),
+                }
+                for version in versions
+            ]
+        except Exception as e:
+            # If there's an error, it might be because the column doesn't exist
+            logger.warning(f"Error querying with clustering_version: {str(e)}")
+
+            # Fallback to query without clustering_version
+            versions = (
+                db.query(ClusteringHistory)
+                .filter(ClusteringHistory.dataset_id == dataset_id)
+                .order_by(ClusteringHistory.created_at.desc())
+                .all()
+            )
+
+            return [
+                {
+                    "id": version.id,
+                    "version": 1,  # Default to version 1 for backward compatibility
+                    "status": version.clustering_status,
+                    "created_at": version.created_at.isoformat(),
+                    "completed_at": (
+                        version.completed_at.isoformat()
+                        if version.completed_at
+                        else None
+                    ),
+                }
+                for version in versions
+            ]
+    except Exception as e:
+        logger.error(f"Error getting clustering versions: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))

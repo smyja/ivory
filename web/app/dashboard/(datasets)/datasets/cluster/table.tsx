@@ -15,6 +15,7 @@ interface ClusteringHistory {
   created_at: string;
   completed_at: string | null;
   error_message?: string;
+  clustering_version: number;
 }
 
 interface ClusteringTableProps {
@@ -105,7 +106,7 @@ export function ClusteringTable({ selectedStatus, history }: ClusteringTableProp
           color="black"
           radius="md"
           rightSection={<IconExternalLink size={14} />}
-          onClick={() => router.push(`/dashboard/datasets/cluster?id=${row.dataset_id}`)}
+          onClick={() => router.push(`/dashboard/datasets/cluster?id=${row.dataset_id}&version=${row.clustering_version}`)}
           disabled={row.clustering_status !== 'completed'}
           styles={{
             root: {
