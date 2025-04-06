@@ -199,7 +199,7 @@ export default function DatasetsPage() {
           Create Dataset
         </Button>
       </Group>
-      <Card shadow="sm" padding="lg" radius="md" withBorder mb="xl">
+      <Card shadow="sm" padding="lg" withBorder mb="xl">
         {error && (
           <Alert color="red" className="mb-4">
             {error}

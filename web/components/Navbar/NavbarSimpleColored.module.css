@@ -5,7 +5,8 @@
   padding: var(--mantine-spacing-md);
   display: flex;
   flex-direction: column;
-  border-right: rem(1px) solid light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-4));
+  background-color: black;
+  border-right: rem(1px) solid var(--mantine-color-dark-4);
 }
 
 .navbarMain {
@@ -15,13 +16,13 @@
 .header {
   padding-bottom: var(--mantine-spacing-md);
   margin-bottom: calc(var(--mantine-spacing-md) * 1.5);
-  border-bottom: rem(1px) solid light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-4));
+  border-bottom: rem(1px) solid var(--mantine-color-dark-4);
 }
 
 .footer {
   padding-top: var(--mantine-spacing-md);
   margin-top: var(--mantine-spacing-md);
-  border-top: rem(1px) solid light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-4));
+  border-top: rem(1px) solid var(--mantine-color-dark-4);
 }
 
 /* Link Styles */
@@ -30,37 +31,31 @@
   align-items: center;
   text-decoration: none;
   font-size: var(--mantine-font-size-sm);
-  color: light-dark(var(--mantine-color-gray-7), var(--mantine-color-dark-1));
+  color: white;
   padding: var(--mantine-spacing-xs) var(--mantine-spacing-sm);
-
   font-weight: 500;
   transition: background-color 0.3s ease;
-
 }
 
 .link:hover {
-  background-color: light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-6));
-  color: light-dark(var(--mantine-color-black), var(--mantine-color-white));
-
-  .linkIcon {
-    color: light-dark(var(--mantine-color-black), var(--mantine-color-white));
-  }
+  background-color: rgba(255, 255, 255, 0.1);
+  color: white;
 }
 
 .linkIcon {
-  color: light-dark(var(--mantine-color-gray-6), var(--mantine-color-dark-2));
+  color: white;
   margin-right: var(--mantine-spacing-sm);
   width: rem(25px);
   height: rem(25px);
 }
 
 .link[data-active] {
-  background-color: var(--mantine-color-dark-light);
-  color: var(--mantine-color-dark-light-color);
+  background-color: tomato;
+  color: white;
+}
 
-  .linkIcon {
-    color: var(--mantine-color-dark-light-color);
-  }
+.link[data-active] .linkIcon {
+  color: white;
 }
 
 /* Collapsible Link Styles */
@@ -72,10 +67,9 @@
   display: flex;
   align-items: center;
   width: 100%;
-  /* Ensure the button covers the entire width */
   padding: var(--mantine-spacing-xs) var(--mantine-spacing-sm);
   border-radius: var(--mantine-radius-sm);
-  color: light-dark(var(--mantine-color-gray-7), var(--mantine-color-dark-1));
+  color: white;
   transition: background-color 0.3s ease;
   text-decoration: none;
   font-size: var(--mantine-font-size-sm);
@@ -83,49 +77,53 @@
 }
 
 .control:hover {
-  background-color: light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-6));
-  color: light-dark(var(--mantine-color-black), var (--mantine-color-white));
+  background-color: rgba(255, 255, 255, 0.1);
+  color: white;
 }
 
 .control.active {
-  background-color: var(--mantine-color-dark-light);
-  color: var(--mantine-color-dark-light-color);
+  background-color: tomato;
+  color: white;
 }
 
 .chevron {
-
+  color: white;
   transition: transform 0.3s ease;
 }
 
 .subLinks {
-  padding-left: 3rem;
-  display: flex;
-  flex-direction: column;
+  padding-left: 2rem;
+  margin-top: var(--mantine-spacing-xs);
 }
 
 .subLinks .link {
+  padding: var(--mantine-spacing-xs) var(--mantine-spacing-sm);
+  border-radius: var(--mantine-radius-sm);
+  color: white;
   font-size: 0.9rem;
   padding-left: 1.5rem;
   /* Ensure padding is consistent with other links */
-  padding: var(--mantine-spacing-xs) var(--mantine-spacing-sm);
   display: flex;
   align-items: center;
   transition: background-color 0.3s ease;
 }
 
 .subLinks .link:hover {
-  background-color: light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-6));
-  color: light-dark(var(--mantine-color-black), var(--mantine-color-white));
+  background-color: rgba(255, 255, 255, 0.1);
 }
 
 .link.active {
-  background-color: var(--mantine-color-dark-light);
-  color: var(--mantine-color-dark-light-color);
-  margin-top: 10px;
+  background-color: tomato;
+  color: white;
 }
 
 .link.active .linkIcon {
-  color: var(--mantine-color-dark-light-color);
+  color: white;
+}
+
+.navbarMain a,
+.navbarMain button {
+  color: white;
 }
 
 /* Ensure no underlines on any links within the sidebar */

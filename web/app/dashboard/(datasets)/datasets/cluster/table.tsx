@@ -146,7 +146,7 @@ export function ClusteringTable({ selectedStatus, history }: ClusteringTableProp
         />
       </Group>
 
-      <Box style={{ borderRadius: '8px', overflow: 'hidden', border: '1px solid #ddd' }}>
+      <Box style={{ overflow: 'hidden', border: '1px solid #ddd' }}>
         <Table verticalSpacing="xs" highlightOnHover style={{ backgroundColor: "white" }}>
           <Table.Thead>
             <Table.Tr>
