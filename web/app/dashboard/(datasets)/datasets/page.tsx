@@ -36,6 +36,7 @@ export default function DatasetsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<number | null>(null);
+  const [viewLoading, setViewLoading] = useState<number | null>(null);
   const [clusteringStatus, setClusteringStatus] = useState<Record<number, string>>({});
   const router = useRouter();
 
@@ -64,6 +65,7 @@ export default function DatasetsPage() {
   }, []);
 
   const handleView = (datasetId: number) => {
+    setViewLoading(datasetId);
     router.push(`/dashboard/datasets/view?id=${datasetId}`);
   };
 
@@ -176,27 +178,28 @@ export default function DatasetsPage() {
 
   return (
     <Container size="xl" py="xl">
-      <Card shadow="sm" padding="lg" radius="md" withBorder mb="xl">
-        <Group justify="space-between" mb="md">
-          <Title order={2}>Datasets</Title>
-          <Button
-            onClick={() => router.push('/dashboard/datasets/create')}
-            variant="filled"
-            color="black"
-            radius="md"
-            styles={{
-              root: {
-                transition: 'background-color 0.2s ease',
-                '&:hover': {
-                  backgroundColor: '#333',
-                },
+      <Group justify="space-between" mb="md">
+        <Title order={1} fw={300}>
+          Datasets
+        </Title>
+        <Button
+          onClick={() => router.push('/dashboard/datasets/create')}
+          variant="filled"
+          color="black"
+          radius="md"
+          styles={{
+            root: {
+              transition: 'background-color 0.2s ease',
+              '&:hover': {
+                backgroundColor: '#333',
               },
-            }}
-          >
-            Create Dataset
-          </Button>
-        </Group>
-
+            },
+          }}
+        >
+          Create Dataset
+        </Button>
+      </Group>
+      <Card shadow="sm" padding="lg" radius="md" withBorder mb="xl">
         {error && (
           <Alert color="red" className="mb-4">
             {error}
@@ -216,126 +219,136 @@ export default function DatasetsPage() {
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
-            {datasets.map((dataset) => (
-              <Table.Tr key={dataset.id}>
-                <Table.Td>
-                  <Text size="sm" fw={500}>
-                    {dataset.name}
-                  </Text>
-                </Table.Td>
-                <Table.Td>
-                  <Text size="sm">{dataset.subset || '-'}</Text>
-                </Table.Td>
-                <Table.Td>
-                  <Text size="sm">{dataset.split || '-'}</Text>
-                </Table.Td>
-                <Table.Td>
-                  <Badge color={getStatusColor(dataset.status)} variant="light">
-                    {dataset.status}
-                  </Badge>
-                </Table.Td>
-                <Table.Td>
-                  {clusteringStatus[dataset.id] && (
-                    <Badge
-                      color={
-                        clusteringStatus[dataset.id] === 'completed'
-                          ? 'green'
-                          : clusteringStatus[dataset.id] === 'failed'
-                            ? 'red'
-                            : 'black'
-                      }
-                    >
-                      {clusteringStatus[dataset.id]}
-                    </Badge>
-                  )}
-                </Table.Td>
-                <Table.Td>
-                  <Text size="sm">{formatDate(dataset.download_date)}</Text>
-                </Table.Td>
-                <Table.Td>
-                  <Group gap="xs">
-                    <Tooltip label="View Dataset">
-                      <ActionIcon
-                        variant="light"
-                        color="black"
-                        onClick={() => handleView(dataset.id)}
-                        styles={{
-                          root: {
-                            transition: 'background-color 0.2s ease',
-                            '&:hover': {
-                              backgroundColor: '#f0f0f0',
-                            },
-                          },
-                        }}
-                      >
-                        <IconEye style={{ width: rem(16), height: rem(16) }} />
-                      </ActionIcon>
-                    </Tooltip>
-                    <Tooltip label="Verify Dataset">
-                      <ActionIcon
-                        variant="light"
-                        color="black"
-                        onClick={() => handleRefresh(dataset.id)}
-                        styles={{
-                          root: {
-                            transition: 'background-color 0.2s ease',
-                            '&:hover': {
-                              backgroundColor: '#f0f0f0',
-                            },
-                          },
-                        }}
-                      >
-                        <IconRefresh style={{ width: rem(16), height: rem(16) }} />
-                      </ActionIcon>
-                    </Tooltip>
-                    <Tooltip label="Cluster Dataset">
-                      <ActionIcon
-                        variant="light"
-                        color="black"
-                        onClick={() => handleCluster(dataset.id)}
-                        loading={actionLoading === dataset.id}
-                        styles={{
-                          root: {
-                            transition: 'background-color 0.2s ease',
-                            '&:hover': {
-                              backgroundColor: '#f0f0f0',
-                            },
-                          },
-                        }}
-                      >
-                        <IconPlus style={{ width: rem(16), height: rem(16) }} />
-                      </ActionIcon>
-                    </Tooltip>
-                    <Tooltip label="Delete Dataset">
-                      <ActionIcon
-                        variant="light"
-                        color="red"
-                        onClick={() => handleDelete(dataset.id)}
-                        loading={actionLoading === dataset.id}
-                        styles={{
-                          root: {
-                            transition: 'background-color 0.2s ease',
-                            '&:hover': {
-                              backgroundColor: '#ffebee',
-                            },
-                          },
-                        }}
-                      >
-                        <IconTrash style={{ width: rem(16), height: rem(16) }} />
-                      </ActionIcon>
-                    </Tooltip>
+            {loading ? (
+              <Table.Tr>
+                <Table.Td colSpan={7}>
+                  <Group justify="center" py="xl">
+                    <Text c="dimmed">Loading datasets...</Text>
                   </Group>
                 </Table.Td>
               </Table.Tr>
-            ))}
-            {datasets.length === 0 && !loading && (
+            ) : datasets.length === 0 ? (
               <Table.Tr>
-                <Table.Td colSpan={6}>
+                <Table.Td colSpan={7}>
                   <Text ta="center" c="dimmed">
                     No datasets found. Create one to get started.
                   </Text>
                 </Table.Td>
               </Table.Tr>
+            ) : (
+              datasets.map((dataset) => (
+                <Table.Tr key={dataset.id}>
+                  <Table.Td>
+                    <Text size="sm" fw={500}>
+                      {dataset.name}
+                    </Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="sm">{dataset.subset || '-'}</Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="sm">{dataset.split || '-'}</Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Badge color={getStatusColor(dataset.status)} variant="light">
+                      {dataset.status}
+                    </Badge>
+                  </Table.Td>
+                  <Table.Td>
+                    {clusteringStatus[dataset.id] && (
+                      <Badge
+                        color={
+                          clusteringStatus[dataset.id] === 'completed'
+                            ? 'green'
+                            : clusteringStatus[dataset.id] === 'failed'
+                              ? 'red'
+                              : 'black'
+                        }
+                      >
+                        {clusteringStatus[dataset.id]}
+                      </Badge>
+                    )}
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="sm">{formatDate(dataset.download_date)}</Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Group gap="xs">
+                      <Tooltip label="View Dataset">
+                        <ActionIcon
+                          variant="light"
+                          color="black"
+                          onClick={() => handleView(dataset.id)}
+                          loading={viewLoading === dataset.id}
+                          styles={{
+                            root: {
+                              transition: 'background-color 0.2s ease',
+                              '&:hover': {
+                                backgroundColor: '#f0f0f0',
+                              },
+                            },
+                          }}
+                        >
+                          <IconEye style={{ width: rem(16), height: rem(16) }} />
+                        </ActionIcon>
+                      </Tooltip>
+                      <Tooltip label="Verify Dataset">
+                        <ActionIcon
+                          variant="light"
+                          color="black"
+                          onClick={() => handleRefresh(dataset.id)}
+                          styles={{
+                            root: {
+                              transition: 'background-color 0.2s ease',
+                              '&:hover': {
+                                backgroundColor: '#f0f0f0',
+                              },
+                            },
+                          }}
+                        >
+                          <IconRefresh style={{ width: rem(16), height: rem(16) }} />
+                        </ActionIcon>
+                      </Tooltip>
+                      <Tooltip label="Cluster Dataset">
+                        <ActionIcon
+                          variant="light"
+                          color="black"
+                          onClick={() => handleCluster(dataset.id)}
+                          loading={actionLoading === dataset.id}
+                          styles={{
+                            root: {
+                              transition: 'background-color 0.2s ease',
+                              '&:hover': {
+                                backgroundColor: '#f0f0f0',
+                              },
+                            },
+                          }}
+                        >
+                          <IconPlus style={{ width: rem(16), height: rem(16) }} />
+                        </ActionIcon>
+                      </Tooltip>
+                      <Tooltip label="Delete Dataset">
+                        <ActionIcon
+                          variant="light"
+                          color="red"
+                          onClick={() => handleDelete(dataset.id)}
+                          loading={actionLoading === dataset.id}
+                          styles={{
+                            root: {
+                              transition: 'background-color 0.2s ease',
+                              '&:hover': {
+                                backgroundColor: '#ffebee',
+                              },
+                            },
+                          }}
+                        >
+                          <IconTrash style={{ width: rem(16), height: rem(16) }} />
+                        </ActionIcon>
+                      </Tooltip>
+                    </Group>
+                  </Table.Td>
+                </Table.Tr>
+              ))
             )}
           </Table.Tbody>
         </Table>
