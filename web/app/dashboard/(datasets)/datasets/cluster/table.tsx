@@ -146,18 +146,16 @@ export function ClusteringTable({ selectedStatus, history }: ClusteringTableProp
         />
       </Group>
 
-      <Box style={{ overflow: 'hidden', border: '1px solid #ddd' }}>
+      <Box style={{ overflow: 'hidden', borderRadius: '8px' }}>
+        <Group p="md" style={{ backgroundColor: '#f8f9fa' }}>
+          <Text fw={500} c="dimmed" style={{ flex: 1 }}>Dataset</Text>
+          <Text fw={500} c="dimmed" style={{ flex: 1 }}>Clustering Status</Text>
+          <Text fw={500} c="dimmed" style={{ flex: 1 }}>Titling Status</Text>
+          <Text fw={500} c="dimmed" style={{ flex: 1 }}>Started At</Text>
+          <Text fw={500} c="dimmed" style={{ flex: 1 }}>Completed At</Text>
+          <Text fw={500} c="dimmed" style={{ flex: 1 }}>Actions</Text>
+        </Group>
         <Table verticalSpacing="xs" highlightOnHover style={{ backgroundColor: "white" }}>
-          <Table.Thead>
-            <Table.Tr>
-              <Table.Th>Dataset</Table.Th>
-              <Table.Th>Clustering Status</Table.Th>
-              <Table.Th>Titling Status</Table.Th>
-              <Table.Th>Started At</Table.Th>
-              <Table.Th>Completed At</Table.Th>
-              <Table.Th>Actions</Table.Th>
-            </Table.Tr>
-          </Table.Thead>
           <Table.Tbody>{rows}</Table.Tbody>
         </Table>
 
@@ -167,7 +165,6 @@ export function ClusteringTable({ selectedStatus, history }: ClusteringTableProp
             padding: '10px',
             display: 'flex',
             justifyContent: 'center',
-            borderTop: '1px solid #ddd',
           }}
         >
           <Pagination
