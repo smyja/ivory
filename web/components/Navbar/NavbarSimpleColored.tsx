@@ -29,7 +29,7 @@ const data: NavItem[] = [
   { link: '/dashboard/connectors', label: 'Connectors', icon: IconPlugConnected },
   { link: '/dashboard/documents', label: 'Documents', icon: IconFiles },
   {
-    label: 'Datasets',
+    label: 'Data & clusters',
     icon: IconDatabase,
     links: [
       { link: '/dashboard/datasets', label: 'Datasets' },
@@ -75,10 +75,7 @@ export function NavbarSimpleColored() {
               <Box key={item.label} className={classes.collapsibleLink}>
                 <UnstyledButton
                   onClick={() => setOpenGroup((prev) => (prev === item.label ? '' : item.label))}
-                  className={`${classes.control} ${active === item.label || item.links.some((subLink) => pathname === subLink.link)
-                    ? classes.active
-                    : ''
-                    }`}
+                  className={`${classes.control}`}
                 >
                   <Group justify="space-between">
                     <Box style={{ display: 'flex', alignItems: 'center' }}>
@@ -90,7 +87,7 @@ export function NavbarSimpleColored() {
                       stroke={1.5}
                       style={{
                         transform: openGroup === item.label ? 'rotate(90deg)' : 'none',
-                        marginLeft: rem(35)
+                        marginLeft: rem(-5)
                       }}
                     />
                   </Group>

@@ -66,7 +66,7 @@ async def generate_semantic_title(question_subset: List[str]) -> str:
         client = LLMClient.get_instance()
         response = await asyncio.to_thread(
             client.chat.completions.create,
-            model="anthropic/claude-3-sonnet",
+            model="anthropic/claude-3.7-sonnet",
             messages=[
                 {
                     "role": "system",
