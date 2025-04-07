@@ -140,7 +140,7 @@ export default function DatasetsPage() {
     const pollInterval = setInterval(async () => {
       try {
         const response = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}/clustering_status`
+          `${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}/status?status_type=clustering`
         );
         if (!response.ok) {
           throw new Error('Failed to fetch clustering status');

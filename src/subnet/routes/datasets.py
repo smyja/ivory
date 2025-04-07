@@ -29,13 +29,7 @@ from utils.database import (
 )
 from openai import OpenAI
 
-# Force reload of clustering module to get the updated function definition
-# with 4 parameters (texts, db, dataset_id, version)
-# import importlib   # REMOVED
-# import utils.clustering # REMOVED
-# importlib.reload(utils.clustering) # REMOVED
 
-# Import as different name to avoid conflicts
 from utils.clustering import cluster_texts as clustering_utils_cluster_texts
 from datetime import datetime
 import duckdb
@@ -215,253 +209,175 @@ async def list_active_downloads(db: Session = Depends(get_db)):
 
 
 @router.get("/{dataset_id}")
-async def get_dataset_info(dataset_id: int, db: Session = Depends(get_db)):
-    dataset_metadata = (
-        db.query(DatasetMetadata).filter(DatasetMetadata.id == dataset_id).first()
-    )
-    if not dataset_metadata:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Dataset with id {dataset_id} not found in database",
+async def get_dataset_info(
+    dataset_id: int,
+    detail_level: Optional[str] = Query(
+        "basic", description="Level of detail (basic/full/data)"
+    ),
+    page: Optional[int] = Query(1, ge=1, description="Page number for data retrieval"),
+    page_size: Optional[int] = Query(
+        50, ge=1, le=1000, description="Number of records per page"
+    ),
+    db: Session = Depends(get_db),
+):
+    """Get dataset information with configurable detail level."""
+    try:
+        dataset_metadata = (
+            db.query(DatasetMetadata).filter(DatasetMetadata.id == dataset_id).first()
         )
+        if not dataset_metadata:
+            raise HTTPException(status_code=404, detail="Dataset not found")
 
-    logger.info(
-        f"Found dataset metadata for id {dataset_id}: {dataset_metadata.__dict__}"
-    )
+        if detail_level == "data":
+            if dataset_metadata.status != DownloadStatus.COMPLETED:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Dataset is not ready. Current status: {dataset_metadata.status.value}",
+                )
 
-    # Improved path construction
-    dataset_path = os.path.join("datasets", dataset_metadata.name.replace("/", "_"))
-    if dataset_metadata.subset:
-        dataset_path = os.path.join(dataset_path, dataset_metadata.subset)
+            dataset_path = os.path.join(
+                "datasets", dataset_metadata.name.replace("/", "_")
+            )
+            if dataset_metadata.subset:
+                dataset_path = os.path.join(dataset_path, dataset_metadata.subset)
 
-    logger.info(f"Constructed dataset path: {dataset_path}")
+            # Find splits
+            available_splits = [
+                d
+                for d in os.listdir(dataset_path)
+                if os.path.isdir(os.path.join(dataset_path, d))
+            ]
+            if not available_splits:
+                raise HTTPException(
+                    status_code=404, detail="No splits found for this dataset"
+                )
 
-    if not os.path.exists(dataset_path):
-        raise HTTPException(
-            status_code=404, detail=f"Dataset directory not found: {dataset_path}"
-        )
+            # Use the first split if none specified
+            split = (
+                dataset_metadata.split
+                if dataset_metadata.split
+                else available_splits[0]
+            )
+            split_path = os.path.join(dataset_path, split)
 
-    # More flexible split handling
-    if dataset_metadata.split:
-        split_path = os.path.join(dataset_path, dataset_metadata.split)
-        if os.path.exists(split_path):
-            splits = [dataset_metadata.split]
-        else:
+            # Find parquet files
+            parquet_files = [
+                f for f in os.listdir(split_path) if f.endswith(".parquet")
+            ]
+            if not parquet_files:
+                raise HTTPException(
+                    status_code=404, detail=f"No parquet files found in split: {split}"
+                )
+
+            parquet_file = os.path.join(split_path, parquet_files[0])
+            if not os.path.exists(parquet_file):
+                raise HTTPException(status_code=404, detail="Dataset file not found")
+
+            # Calculate offset for pagination
+            offset = (page - 1) * page_size
+
+            # Use DuckDB for data retrieval with pagination
+            with get_duckdb_connection() as conn:
+                # Get total count
+                total_records = conn.execute(
+                    f"SELECT COUNT(*) FROM '{parquet_file}'"
+                ).fetchone()[0]
+
+                # Get paginated data
+                df = conn.execute(
+                    f"SELECT * FROM '{parquet_file}' LIMIT {page_size} OFFSET {offset}"
+                ).df()
+
+                return {
+                    "split": split,
+                    "total_records": total_records,
+                    "page": page,
+                    "page_size": page_size,
+                    "records": df.to_dict(orient="records"),
+                }
+
+        elif detail_level == "full":
+            # Get detailed dataset information including splits and sample data
+            dataset_path = os.path.join(
+                "datasets", dataset_metadata.name.replace("/", "_")
+            )
+            if dataset_metadata.subset:
+                dataset_path = os.path.join(dataset_path, dataset_metadata.subset)
+
+            if not os.path.exists(dataset_path):
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Dataset directory not found: {dataset_path}",
+                )
+
             splits = [
                 split
                 for split in os.listdir(dataset_path)
                 if os.path.isdir(os.path.join(dataset_path, split))
             ]
-    else:
-        splits = [
-            split
-            for split in os.listdir(dataset_path)
-            if os.path.isdir(os.path.join(dataset_path, split))
-        ]
 
-    logger.info(f"Found splits: {splits}")
-
-    if not splits:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No splits found in dataset directory: {dataset_path}",
-        )
-
-    rows_info = {}
-    with get_duckdb_connection() as conn:
-        for split in splits:
-            split_path = os.path.join(dataset_path, split)
-            logger.info(f"Processing split: {split_path}")
-            parquet_files = [
-                f for f in os.listdir(split_path) if f.endswith(".parquet")
-            ]
-
-            if not parquet_files:
-                logger.warning(
-                    f"No Parquet files found in split directory: {split_path}"
+            if not splits:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No splits found in dataset directory: {dataset_path}",
                 )
-                continue
 
-            data_file = os.path.join(split_path, parquet_files[0])
-            logger.info(f"Processing Parquet file: {data_file}")
+            rows_info = {}
+            with get_duckdb_connection() as conn:
+                for split in splits:
+                    split_path = os.path.join(dataset_path, split)
+                    parquet_files = [
+                        f for f in os.listdir(split_path) if f.endswith(".parquet")
+                    ]
 
-            try:
-                conn.execute(
-                    f"CREATE OR REPLACE TABLE temp AS SELECT * FROM parquet_scan('{data_file}')"
-                )
-                columns = conn.execute("SELECT * FROM temp LIMIT 0").description
-                row_count = conn.execute("SELECT COUNT(*) FROM temp").fetchone()[0]
-                # Get all rows instead of just 5
-                sample_rows = (
-                    conn.execute("SELECT * FROM temp")
-                    .fetchdf()
-                    .to_dict(orient="records")
-                )
-                rows_info[split] = {
-                    "columns": [col[0] for col in columns],
-                    "row_count": row_count,
-                    "sample_rows": sample_rows,
-                }
-            except Exception as e:
-                logger.error(f"Error processing Parquet file {data_file}: {str(e)}")
-                rows_info[split] = {"error": str(e)}
+                    if not parquet_files:
+                        continue
 
-    if not rows_info:
-        raise HTTPException(
-            status_code=404, detail="No valid Parquet files found in any split"
-        )
-
-    return {
-        "id": dataset_metadata.id,
-        "name": dataset_metadata.name,
-        "subset": dataset_metadata.subset,
-        "status": dataset_metadata.status,
-        "splits": rows_info,
-    }
-
-
-@router.get("/{dataset_id}/records")
-async def get_dataset_records(
-    dataset_id: int,
-    split: Optional[str] = Query(None, description="Dataset split to query"),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=1000),
-    db: Session = Depends(get_db),
-):
-    dataset_metadata = (
-        db.query(DatasetMetadata).filter(DatasetMetadata.id == dataset_id).first()
-    )
-    if not dataset_metadata:
-        raise HTTPException(status_code=404, detail="Dataset not found")
-
-    dataset_path = os.path.join("datasets", dataset_metadata.name.replace("/", "_"))
-    if dataset_metadata.subset:
-        dataset_path = os.path.join(dataset_path, dataset_metadata.subset)
-
-    # If split is not provided, find the first available split
-    if split is None:
-        available_splits = [
-            d
-            for d in os.listdir(dataset_path)
-            if os.path.isdir(os.path.join(dataset_path, d))
-        ]
-        if not available_splits:
-            raise HTTPException(
-                status_code=404, detail="No splits found for this dataset"
-            )
-        split = available_splits[0]
-
-    split_path = os.path.join(dataset_path, split)
-    if not os.path.exists(split_path):
-        raise HTTPException(
-            status_code=404, detail=f"Split directory not found: {split_path}"
-        )
-
-    # Find the parquet file in the split directory
-    parquet_files = [f for f in os.listdir(split_path) if f.endswith(".parquet")]
-    if not parquet_files:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No parquet files found in split directory: {split_path}",
-        )
-
-    data_file = os.path.join(split_path, parquet_files[0])
-    if not os.path.exists(data_file):
-        raise HTTPException(
-            status_code=404, detail=f"Dataset file not found: {data_file}"
-        )
-
-    try:
-        with get_duckdb_connection() as conn:
-            # Get total count
-            total_records = conn.execute(
-                f"SELECT COUNT(*) FROM parquet_scan('{data_file}')"
-            ).fetchone()[0]
-
-            # Calculate offset
-            offset = (page - 1) * page_size
-
-            # Fetch paginated records
-            records = conn.execute(
-                f"SELECT * FROM parquet_scan('{data_file}') LIMIT {page_size} OFFSET {offset}"
-            ).fetchdf()
+                    data_file = os.path.join(split_path, parquet_files[0])
+                    try:
+                        conn.execute(
+                            f"CREATE OR REPLACE TABLE temp AS SELECT * FROM parquet_scan('{data_file}')"
+                        )
+                        columns = conn.execute("SELECT * FROM temp LIMIT 0").description
+                        row_count = conn.execute(
+                            "SELECT COUNT(*) FROM temp"
+                        ).fetchone()[0]
+                        sample_rows = (
+                            conn.execute("SELECT * FROM temp LIMIT 5")
+                            .fetchdf()
+                            .to_dict(orient="records")
+                        )
+                        rows_info[split] = {
+                            "columns": [col[0] for col in columns],
+                            "row_count": row_count,
+                            "sample_rows": sample_rows,
+                        }
+                    except Exception as e:
+                        logger.error(
+                            f"Error processing Parquet file {data_file}: {str(e)}"
+                        )
+                        rows_info[split] = {"error": str(e)}
 
             return {
-                "split": split,
-                "total_records": total_records,
-                "page": page,
-                "page_size": page_size,
-                "records": records.to_dict(orient="records"),
+                "id": dataset_metadata.id,
+                "name": dataset_metadata.name,
+                "subset": dataset_metadata.subset,
+                "status": dataset_metadata.status.value,
+                "splits": rows_info,
             }
+        else:
+            # Basic information
+            return {
+                "id": dataset_metadata.id,
+                "name": dataset_metadata.name,
+                "subset": dataset_metadata.subset,
+                "status": dataset_metadata.status.value,
+                "download_date": dataset_metadata.download_date,
+            }
+
     except Exception as e:
-        logger.error(f"Error reading dataset: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error reading dataset: {str(e)}")
-
-
-@router.get("/{dataset_id}/query")
-async def query_dataset(
-    dataset_id: int,
-    query: str = Query(..., description="SQL-like query string"),
-    split: Optional[str] = Query(None, description="Dataset split to query"),
-    db: Session = Depends(get_db),
-):
-    dataset_metadata = (
-        db.query(DatasetMetadata).filter(DatasetMetadata.id == dataset_id).first()
-    )
-    if not dataset_metadata:
-        raise HTTPException(status_code=404, detail="Dataset not found")
-
-    dataset_path = os.path.join("datasets", dataset_metadata.name.replace("/", "_"))
-    if dataset_metadata.subset:
-        dataset_path = os.path.join(dataset_path, dataset_metadata.subset)
-
-    # If split is not provided, find the first available split
-    if split is None:
-        available_splits = [
-            d
-            for d in os.listdir(dataset_path)
-            if os.path.isdir(os.path.join(dataset_path, d))
-        ]
-        if not available_splits:
-            raise HTTPException(
-                status_code=404, detail="No splits found for this dataset"
-            )
-        split = available_splits[0]
-
-    split_path = os.path.join(dataset_path, split)
-    if not os.path.exists(split_path):
-        raise HTTPException(
-            status_code=404, detail=f"Split directory not found: {split_path}"
-        )
-
-    # Find the parquet file in the split directory
-    parquet_files = [f for f in os.listdir(split_path) if f.endswith(".parquet")]
-    if not parquet_files:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No parquet files found in split directory: {split_path}",
-        )
-
-    data_file = os.path.join(split_path, parquet_files[0])
-    if not os.path.exists(data_file):
-        raise HTTPException(
-            status_code=404, detail=f"Dataset file not found: {data_file}"
-        )
-
-    try:
-        with get_duckdb_connection() as conn:
-            conn.execute(
-                f"CREATE TABLE IF NOT EXISTS dataset_{dataset_id} AS SELECT * FROM parquet_scan('{data_file}')"
-            )
-            result_df = conn.execute(query).fetchdf()
-
-        return {
-            "split": split,
-            "total_records": len(result_df),
-            "records": result_df.to_dict(orient="records"),
-        }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Error querying dataset: {str(e)}")
+        logger.error(f"Error getting dataset information: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/{dataset_id}/verify")
@@ -496,8 +412,14 @@ async def update_download_status(
 
 
 @router.get("/{dataset_id}/status")
-def get_dataset_status(dataset_id: int, db: Session = Depends(get_db)):
-    """Get the status of a dataset download."""
+async def get_dataset_status(
+    dataset_id: int,
+    status_type: Optional[str] = Query(
+        None, description="Type of status to return (general/clustering)"
+    ),
+    db: Session = Depends(get_db),
+):
+    """Get the status of a dataset (general or clustering)."""
     try:
         dataset_metadata = (
             db.query(DatasetMetadata).filter(DatasetMetadata.id == dataset_id).first()
@@ -505,71 +427,22 @@ def get_dataset_status(dataset_id: int, db: Session = Depends(get_db)):
         if not dataset_metadata:
             raise HTTPException(status_code=404, detail="Dataset not found")
 
-        return {
-            "id": dataset_metadata.id,
-            "dataset": dataset_metadata.name,
-            "status": dataset_metadata.status.value,
-            "download_date": dataset_metadata.download_date,
-        }
+        if status_type == "clustering":
+            if dataset_metadata.clustering_status == "failed":
+                raise HTTPException(
+                    status_code=500,
+                    detail="Clustering failed. Please try again.",
+                )
+            return {"status": dataset_metadata.clustering_status}
+        else:
+            return {
+                "id": dataset_metadata.id,
+                "dataset": dataset_metadata.name,
+                "status": dataset_metadata.status.value,
+                "download_date": dataset_metadata.download_date,
+            }
     except Exception as e:
         logger.error(f"Error getting dataset status: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/{dataset_id}/data")
-def get_dataset_data(dataset_id: int, db: Session = Depends(get_db)):
-    """Get the data from a downloaded dataset."""
-    try:
-        dataset_metadata = (
-            db.query(DatasetMetadata).filter(DatasetMetadata.id == dataset_id).first()
-        )
-        if not dataset_metadata:
-            raise HTTPException(status_code=404, detail="Dataset not found")
-
-        if dataset_metadata.status != DownloadStatus.COMPLETED:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Dataset is not ready. Current status: {dataset_metadata.status.value}",
-            )
-
-        dataset_path = os.path.join("datasets", dataset_metadata.name.replace("/", "_"))
-        if dataset_metadata.subset:
-            dataset_path = os.path.join(dataset_path, dataset_metadata.subset)
-
-        # Find splits
-        available_splits = [
-            d
-            for d in os.listdir(dataset_path)
-            if os.path.isdir(os.path.join(dataset_path, d))
-        ]
-        if not available_splits:
-            raise HTTPException(
-                status_code=404, detail="No splits found for this dataset"
-            )
-
-        # Use the first split if none specified
-        split = (
-            dataset_metadata.split if dataset_metadata.split else available_splits[0]
-        )
-        split_path = os.path.join(dataset_path, split)
-
-        # Find parquet files
-        parquet_files = [f for f in os.listdir(split_path) if f.endswith(".parquet")]
-        if not parquet_files:
-            raise HTTPException(
-                status_code=404, detail=f"No parquet files found in split: {split}"
-            )
-
-        parquet_file = os.path.join(split_path, parquet_files[0])
-        if not os.path.exists(parquet_file):
-            raise HTTPException(status_code=404, detail="Dataset file not found")
-
-        # Use the new connection manager for DuckDB
-        with get_duckdb_connection() as conn:
-            df = conn.execute(f"SELECT * FROM '{parquet_file}'").df()
-            return df.to_dict(orient="records")
-    except Exception as e:
-        logger.error(f"Error getting dataset data: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

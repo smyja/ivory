@@ -131,7 +131,7 @@ const DatasetView: React.FC = () => {
 
   const fetchDatasetInfo = async () => {
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}`);
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}?detail_level=full`);
       if (!response.ok) {
         throw new Error('Failed to fetch dataset info');
       }
@@ -152,7 +152,7 @@ const DatasetView: React.FC = () => {
     try {
       setIsInitialLoading(true);
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}/records?page=1&page_size=${BACKEND_PAGE_SIZE}`
+        `${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}?detail_level=data&page=1&page_size=${BACKEND_PAGE_SIZE}`
       );
 
       if (!response.ok) {
@@ -198,7 +198,7 @@ const DatasetView: React.FC = () => {
     try {
       setIsPageLoading(true);
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}/records?page=${backendPage}&page_size=${BACKEND_PAGE_SIZE}`
+        `${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}?detail_level=data&page=${backendPage}&page_size=${BACKEND_PAGE_SIZE}`
       );
 
       if (!response.ok) {
