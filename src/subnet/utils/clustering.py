@@ -1,40 +1,48 @@
-from typing import List, Dict, Tuple, Optional, ContextManager
+from typing import List, Dict, Tuple, Optional, ContextManager, Any
 from contextlib import contextmanager
 from models import (
+    Base,
+    DatasetMetadata,
     TextDB,
     Category,
+    Level1Cluster,
+    TextAssignment,
+    ClusteringHistory,
     Subcluster,
     TextCluster,
-    DatasetMetadata,
 )
 from utils.vectorizer import vectorize_texts
 from utils.titling import (
     generate_semantic_title,
     derive_overarching_category,
 )
+from sqlalchemy.orm import Session, joinedload
 import hdbscan
 import numpy as np
 import logging
 import asyncio
-from sqlalchemy.orm import Session
 from utils.database import get_duckdb_connection
 import gc
 import os
 import time
 from sklearn.preprocessing import normalize
+from sqlalchemy import text as sql_text
 
 logger = logging.getLogger(__name__)
 
-# Constants - Relaxed parameters to allow cluster formation
-MIN_CLUSTER_SIZE = 5  # Reduced min size for level 1
-MIN_SAMPLES = 3  # Reduced min samples for level 1
+# Constants - Adjusted parameters for better clustering quality
+MIN_CLUSTER_SIZE = 5  # Keep min size for level 1
+MIN_SAMPLES = 4  # Keep min samples for level 1
 CLUSTER_SELECTION_EPS = 0.05  # Keep epsilon as is for now
 BATCH_SIZE = 512
 MAX_RETRIES = 3
 RETRY_DELAY = 1
-MIN_NOISE_PROBABILITY_THRESHOLD = (
-    0.3  # Increased minimum confidence to assign a noise point
-)
+MIN_NOISE_PROBABILITY_THRESHOLD = 0.3  # Reverted back to 0.3 to include more points
+MIN_SUBCLUSTER_SIZE = 3  # Keep constant for minimum subcluster size
+MIN_SUBCLUSTER_SAMPLES = 2  # Keep constant for minimum subcluster samples
+SIMILARITY_THRESHOLD = 0.7  # Keep constant for post-processing similarity check (post-processing is disabled)
+MIN_CATEGORY_CLUSTER_SIZE = 5  # Increased from 3 to 5 (for Level 2 Title Clustering)
+MIN_CATEGORY_SAMPLES = 4  # Increased from 2 to 4 (L2: min_cluster_size - 1)
 
 
 @contextmanager
@@ -119,74 +127,89 @@ def cleanup_dataset_data(dataset_id: int) -> None:
         raise
 
 
-async def create_single_subcluster(
+async def create_single_level1_cluster(
     category_db_id: int,
-    texts: List[str],
-    probs: np.ndarray,
+    texts_in_category: List[str],
+    l2_probs_for_texts: np.ndarray,
     dataset_id: int,
     version: int,
 ):
-    """Helper function to create a single subcluster when subclustering is skipped or fails."""
-    if not texts:
-        return
-
-    # Generate title semantically
-    subcluster_title = await generate_semantic_title(texts)
-    if subcluster_title:
-        subcluster_title = " ".join(subcluster_title.split()[:5])  # Limit title length
-
+    """Creates a single Level1Cluster for a category (e.g., if too small or subclustering failed)."""
+    fallback_title = "General"  # Simple fallback title
+    level1_cluster_db_id = None
     try:
-        with retry_on_lock() as subcluster_conn:
-            subcluster_conn.execute(
+        with retry_on_lock() as conn:
+            # Insert into level1_clusters
+            conn.execute(
                 """
-                INSERT INTO subclusters (category_id, title, row_count, percentage)
+                INSERT INTO level1_clusters (category_id, version, l1_cluster_id, title)
                 VALUES (?, ?, ?, ?)
                 RETURNING id
                 """,
                 [
                     category_db_id,
-                    subcluster_title or "General",  # Fallback title
-                    len(texts),
-                    100.0,  # Takes 100% of the category
+                    version,
+                    -2,  # Use -2 to signify a fallback cluster ID
+                    fallback_title,
                 ],
             )
-            subcluster_db_id = subcluster_conn.fetchone()[0]
+            result = conn.fetchone()
+            if result:
+                level1_cluster_db_id = result[0]
+                logger.info(
+                    f"Inserted single fallback Level1Cluster ID {level1_cluster_db_id} for category {category_db_id}, version {version}."
+                )
 
-            # Insert text-subcluster relationships
-            with retry_on_lock() as text_cluster_conn:
-                for text, prob in zip(texts, probs):
-                    # Ensure prob is a standard Python float
-                    membership_score = (
-                        float(prob)
-                        if isinstance(prob, (np.float32, np.float64))
-                        else prob
+                # Insert into text_assignments
+                with retry_on_lock() as text_assign_conn:
+                    for i, text in enumerate(texts_in_category):
+                        # Use L2 probability as L1 probability here, L2 prob might be 0?
+                        l1_prob = (
+                            float(l2_probs_for_texts[i])
+                            if i < len(l2_probs_for_texts)
+                            else 0.0
+                        )
+                        l2_prob = (
+                            float(l2_probs_for_texts[i])
+                            if i < len(l2_probs_for_texts)
+                            else 0.0
+                        )
+
+                        # First, check if this text already has an assignment
+                        text_assign_conn.execute(
+                            """
+                            INSERT INTO text_assignments (text_id, version, level1_cluster_id, l1_probability, l2_probability)
+                            SELECT t.id, ?, ?, ?, ?
+                            FROM texts t
+                            WHERE t.dataset_id = ? AND t.text = ?
+                            AND NOT EXISTS (
+                                SELECT 1 FROM text_assignments ta 
+                                WHERE ta.text_id = t.id
+                            )
+                            """,
+                            [
+                                version,
+                                level1_cluster_db_id,
+                                l1_prob,
+                                l2_prob,
+                                dataset_id,
+                                text,
+                            ],
+                        )
+                    logger.info(
+                        f"Linked {len(texts_in_category)} texts to fallback Level1Cluster {level1_cluster_db_id}."
                     )
-                    text_cluster_conn.execute(
-                        """
-                        INSERT INTO text_clusters (text_id, subcluster_id, membership_score)
-                        SELECT t.id, ?, ?
-                        FROM texts t
-                        WHERE t.dataset_id = ? AND t.text = ?
-                        ON CONFLICT (text_id, subcluster_id) 
-                        DO UPDATE SET membership_score = ?
-                        """,
-                        [
-                            subcluster_db_id,
-                            membership_score,
-                            dataset_id,
-                            text,
-                            membership_score,
-                        ],
-                    )
-    except Exception as e:
+            else:
+                raise Exception("Fallback Level1Cluster insertion failed.")
+    except Exception as e_single:
         logger.error(
-            f"Failed to create single subcluster for category {category_db_id}: {e}"
+            f"Failed to create single fallback Level1Cluster for category {category_db_id}: {e_single}"
         )
 
 
 async def cluster_texts(
     texts: List[str], db: Session, dataset_id: int, version: int = 1
-) -> Tuple[List[Category], List[Subcluster]]:
+) -> Tuple[List[Category], List[Any]]:
     """
     Cluster texts into categories and subclusters.
 
@@ -197,10 +220,14 @@ async def cluster_texts(
         version: Version number for this clustering attempt
 
     Returns:
-        Tuple of (categories, subclusters)
+        Tuple of (categories, level1_clusters)
     """
     final_categories = []
-    final_subclusters = []
+    final_level1_clusters = []
+    embeddings_array = None
+    clusters = None
+    subclusters_dict = {}
+
     try:
         # Insert or update texts
         try:
@@ -335,19 +362,20 @@ async def cluster_texts(
         unique_clusters = np.unique(clusters[clusters != -1])
         total_texts = len(texts)
         logger.info(
-            f"Processing {len(unique_clusters)} unique clusters for dataset {dataset_id}."
+            f"Processing {len(unique_clusters)} unique L2 categories for dataset {dataset_id}."
         )
 
-        # Process each cluster
-        for cluster_id in unique_clusters:
-            cluster_mask = clusters == cluster_id
+        # Process each L2 category cluster
+        for l2_cluster_id_hdbscan in unique_clusters:
+            cluster_mask = clusters == l2_cluster_id_hdbscan
             cluster_indices = np.where(cluster_mask)[0]
             cluster_texts = [texts[i] for i in cluster_indices]
-            cluster_probs = probabilities[cluster_mask]
+            # Get L2 probabilities for texts in this category
+            l2_probabilities_for_category = probabilities[cluster_mask]
 
-            if not cluster_texts:  # Skip empty clusters if any somehow occur
+            if not cluster_texts:  # Skip empty L2 clusters
                 logger.warning(
-                    f"Skipping empty cluster {cluster_id} for dataset {dataset_id}."
+                    f"Skipping empty L2 category cluster {l2_cluster_id_hdbscan} for dataset {dataset_id}."
                 )
                 continue
 
@@ -355,12 +383,16 @@ async def cluster_texts(
             category_name = await derive_overarching_category(cluster_texts)
 
             # Limit category name length (simple approach)
-            if category_name:
-                category_name = " ".join(
-                    category_name.split()[:3]
-                )  # Limit to first 3 words
-            else:
-                category_name = f"Category {cluster_id}"  # Fallback name
+            # if category_name: # <-- Comment out this block
+            #     category_name = " ".join(
+            #         category_name.split()[:3]
+            #     )  # Limit to first 3 words
+            # else:
+            #     category_name = f"Category {l2_cluster_id_hdbscan}"  # Fallback name
+
+            # Use fallback name only if LLM fails
+            if not category_name:
+                category_name = f"Category {l2_cluster_id_hdbscan}"
 
             # Create category in DB
             category_db_id = None
@@ -368,287 +400,419 @@ async def cluster_texts(
                 with retry_on_lock() as category_conn:
                     category_conn.execute(
                         """
-                        INSERT INTO categories (dataset_id, name, total_rows, percentage, version)
-                        VALUES (?, ?, ?, ?, ?)
+                        INSERT INTO categories (dataset_id, name, version, l2_cluster_id)
+                        VALUES (?, ?, ?, ?)
                         RETURNING id
                         """,
                         [
                             dataset_id,
                             category_name,
-                            len(cluster_texts),
-                            (
-                                len(cluster_texts) / total_texts * 100
-                                if total_texts > 0
-                                else 0
-                            ),
-                            version,  # Add version value
+                            version,
+                            int(l2_cluster_id_hdbscan),  # Save L2 HDBSCAN ID
                         ],
                     )
                     result = category_conn.fetchone()
                     if result:
                         category_db_id = result[0]
                         logger.info(
-                            f"Inserted category ID {category_db_id} with name '{category_name}' for dataset {dataset_id}, version {version}."
-                        )  # Added Log
+                            f"Inserted category ID {category_db_id} with name '{category_name}' for L2 cluster {l2_cluster_id_hdbscan}, dataset {dataset_id}, version {version}."
+                        )
                     else:
                         raise Exception("Category insertion did not return an ID.")
             except Exception as e:
                 logger.error(
-                    f"Failed to insert category '{category_name}' for cluster {cluster_id}, dataset {dataset_id}: {e}"
+                    f"Failed to insert category '{category_name}' for L2 cluster {l2_cluster_id_hdbscan}, dataset {dataset_id}: {e}"
                 )
-                continue  # Skip processing this cluster if category insertion fails
+                continue  # Skip processing this L2 category if insertion fails
 
-            # Subclustering logic within each category
+            # Level 1 Clustering logic within each L2 category
             cluster_embeddings = embeddings_array[cluster_mask]  # Already normalized
 
-            # Determine if subclustering is needed
-            # Note: Subclustering still uses smaller min_samples/min_cluster_size defined inline
-            should_subcluster = len(
+            # Determine if L1 clustering is needed
+            should_l1_cluster = len(
                 cluster_texts
-            ) >= MIN_CLUSTER_SIZE * 2 and cluster_embeddings.shape[  # Check against level 1 size
-                0
-            ] >= max(
+            ) >= MIN_CLUSTER_SIZE * 2 and cluster_embeddings.shape[0] >= max(
                 MIN_SAMPLES - 1, 1
-            )  # Check against level 2 min_samples
+            )
 
-            if should_subcluster:
+            if should_l1_cluster:
                 logger.info(
-                    f"Starting level 2 subclustering for category {category_db_id} (cluster {cluster_id}), dataset {dataset_id} with {cluster_embeddings.shape[0]} items."
+                    f"Starting Level 1 clustering for category {category_db_id} (L2 cluster {l2_cluster_id_hdbscan}), dataset {dataset_id} with {cluster_embeddings.shape[0]} items."
                 )
                 try:
-                    # Subclustering uses smaller parameters defined inline here
-                    subclusterer = hdbscan.HDBSCAN(
-                        min_cluster_size=max(
-                            max(MIN_SAMPLES - 1, 1),
-                            2,  # Keep subcluster min_size small (e.g., 2 or original MIN_SAMPLES-1)
-                        ),
-                        min_samples=max(
-                            MIN_SAMPLES - 1, 1
-                        ),  # Keep subcluster min_samples small
+                    # Use the defined constants for L1 clustering parameters (previously subcluster)
+                    l1_clusterer = hdbscan.HDBSCAN(
+                        min_cluster_size=MIN_SUBCLUSTER_SIZE,  # Rename constants later if desired
+                        min_samples=MIN_SUBCLUSTER_SAMPLES,  # Rename constants later if desired
                         cluster_selection_epsilon=CLUSTER_SELECTION_EPS * 0.8,
-                        metric="euclidean",  # Still euclidean on normalized data
+                        metric="euclidean",
                         cluster_selection_method="leaf",
                         prediction_data=True,
                     )
-                    subclusters = subclusterer.fit_predict(cluster_embeddings)
-                    subcluster_probs = subclusterer.probabilities_
+                    # These are the L1 cluster assignments *within* the L2 category
+                    l1_clusters_local = l1_clusterer.fit_predict(cluster_embeddings)
+                    # These are the L1 probabilities *within* the L2 category
+                    l1_probabilities_local = l1_clusterer.probabilities_
+
+                    # Store L1 results - maybe not needed anymore?
+                    # subclusters_dict[category_db_id] = l1_clusters_local
+
                     gc.collect()
                     logger.info(
-                        f"Level 2 subclustering complete for category {category_db_id}. Found {len(np.unique(subclusters[subclusters != -1]))} subclusters."
+                        f"Level 1 clustering complete for category {category_db_id}. Found {len(np.unique(l1_clusters_local[l1_clusters_local != -1]))} L1 clusters."
                     )
 
-                    # Handle noise in subclusters with threshold
-                    subcluster_noise_mask = subclusters == -1
-                    num_sub_noise = np.sum(subcluster_noise_mask)
-                    assigned_sub_noise_count = 0
-                    if num_sub_noise > 0 and num_sub_noise < len(subclusters):
-                        logger.info(
-                            f"Assigning {num_sub_noise} noise points in subcluster for category {category_db_id}, dataset {dataset_id} (threshold={MIN_NOISE_PROBABILITY_THRESHOLD})."
-                        )
-                        noise_sub_vectors = cluster_embeddings[subcluster_noise_mask]
-                        try:
-                            soft_sub_clusters = hdbscan.membership_vector(
-                                subclusterer, noise_sub_vectors
-                            )
-                            if soft_sub_clusters.ndim < 2:
-                                soft_sub_clusters = soft_sub_clusters.reshape(-1, 1)
-
-                            if soft_sub_clusters.shape[1] > 0:
-                                subcluster_noise_labels = np.argmax(
-                                    soft_sub_clusters, axis=1
-                                )
-                                subcluster_noise_probs = np.max(
-                                    soft_sub_clusters, axis=1
-                                )
-
-                                original_sub_noise_indices = np.where(
-                                    subcluster_noise_mask
-                                )[0]
-
-                                for i in range(num_sub_noise):
-                                    if (
-                                        subcluster_noise_probs[i]
-                                        >= MIN_NOISE_PROBABILITY_THRESHOLD
-                                    ):
-                                        original_idx = original_sub_noise_indices[i]
-                                        subclusters[original_idx] = (
-                                            subcluster_noise_labels[i]
-                                        )
-                                        subcluster_probs[original_idx] = (
-                                            subcluster_noise_probs[i]
-                                        )
-                                        assigned_sub_noise_count += 1
-                                logger.info(
-                                    f"Successfully assigned {assigned_sub_noise_count} / {num_sub_noise} subcluster noise points for category {category_db_id}."
-                                )
-                            else:
-                                logger.warning(
-                                    f"membership_vector returned no cluster probabilities for subcluster noise points in category {category_db_id}. Skipping assignment."
-                                )
-
-                        except Exception as e_sub_noise:
-                            logger.warning(
-                                f"Failed to assign subcluster noise for category {category_db_id}, dataset {dataset_id}: {e_sub_noise}"
-                            )
-                        finally:
-                            del noise_sub_vectors, soft_sub_clusters
-                            gc.collect()
-                    elif num_sub_noise == len(subclusters):
+                    # Check if ANY L1 clusters were found before proceeding
+                    unique_l1_clusters = np.unique(
+                        l1_clusters_local[l1_clusters_local != -1]
+                    )
+                    if len(unique_l1_clusters) == 0:
                         logger.warning(
-                            f"All points ({num_sub_noise}) were noise in subclustering for category {category_db_id}. Creating single subcluster."
+                            f"All points ({len(l1_clusters_local)}) were noise in L1 clustering for category {category_db_id}. Creating single fallback Level1Cluster."
                         )
-                        await create_single_subcluster(
+                        # Use L2 probabilities as fallback probabilities
+                        await create_single_level1_cluster(  # Call renamed helper
                             category_db_id,
-                            cluster_texts,
-                            cluster_probs,
+                            cluster_texts,  # Texts for the whole L2 category
+                            l2_probabilities_for_category,  # L2 probabilities for these texts
                             dataset_id,
                             version,
                         )
-                        del subclusterer  # Free memory
+                        del l1_clusterer  # Free memory here after fallback
                         gc.collect()
-                        continue  # Skip rest of subcluster processing loop
+                        continue  # Skip rest of L1 cluster processing loop for this category
+                    # --- End check ---
 
-                    del subcluster_noise_mask  # Free memory
-                    del subclusterer  # Free HDBSCAN object memory
+                    del l1_clusterer  # Free memory earlier if successful
                     gc.collect()
 
-                    unique_subclusters = np.unique(subclusters[subclusters != -1])
                     logger.info(
-                        f"Processing {len(unique_subclusters)} unique subclusters for category {category_db_id}, dataset {dataset_id}."
+                        f"Processing {len(unique_l1_clusters)} unique L1 clusters for category {category_db_id}, dataset {dataset_id}."
                     )
 
-                    # Process each subcluster
-                    for (
-                        sub_id_local
-                    ) in unique_subclusters:  # Use a different name to avoid confusion
-                        subcluster_mask = subclusters == sub_id_local
-                        subcluster_indices = np.where(subcluster_mask)[0]
-                        # Map local indices back to original text list indices
-                        original_indices = cluster_indices[subcluster_indices]
-                        subcluster_texts = [texts[i] for i in original_indices]
-                        # Get probabilities corresponding to the subcluster texts
-                        subcluster_probs_filtered = subcluster_probs[subcluster_mask]
+                    # Process each *found* L1 cluster
+                    for l1_id_local in unique_l1_clusters:
+                        l1_cluster_mask_local = l1_clusters_local == l1_id_local
+                        l1_cluster_indices_local = np.where(l1_cluster_mask_local)[0]
+                        # Map local L1 indices back to original text list indices
+                        original_indices_for_l1 = cluster_indices[
+                            l1_cluster_indices_local
+                        ]
+                        l1_cluster_texts = [texts[i] for i in original_indices_for_l1]
+                        # Get L1 probabilities corresponding to the L1 cluster texts
+                        l1_probs_filtered = l1_probabilities_local[
+                            l1_cluster_mask_local
+                        ]
+                        # Get L2 probabilities corresponding to the L1 cluster texts
+                        l2_probs_filtered = l2_probabilities_for_category[
+                            l1_cluster_indices_local
+                        ]
 
-                        if not subcluster_texts:
+                        if not l1_cluster_texts:
                             logger.warning(
-                                f"Skipping empty subcluster {sub_id_local} for category {category_db_id}, dataset {dataset_id}."
+                                f"Skipping empty L1 cluster {l1_id_local} for category {category_db_id}, dataset {dataset_id}."
                             )
                             continue
 
-                        # Generate subcluster title semantically
-                        subcluster_title = await generate_semantic_title(
-                            subcluster_texts
-                        )
-                        if subcluster_title:
-                            subcluster_title = " ".join(
-                                subcluster_title.split()[:5]
+                        # Generate Level1Cluster title semantically
+                        level1_title = await generate_semantic_title(l1_cluster_texts)
+                        if level1_title:
+                            level1_title = " ".join(
+                                level1_title.split()[:5]
                             )  # Limit title length
                         else:
-                            subcluster_title = (
-                                f"Subcluster {sub_id_local}"  # Fallback name
-                            )
+                            level1_title = f"Cluster {l1_id_local}"  # Fallback name
 
-                        # Create subcluster in DB
-                        subcluster_db_id = None
+                        # Create Level1Cluster in DB
+                        level1_cluster_db_id = None
                         try:
-                            with retry_on_lock() as subcluster_conn:
-                                subcluster_conn.execute(
+                            # --- Insert Level1Cluster using retry_on_lock (keep for this) ---
+                            with retry_on_lock() as l1_conn:
+                                # Insert into level1_clusters table
+                                l1_conn.execute(
                                     """
-                                    INSERT INTO subclusters (category_id, title, row_count, percentage, version)
-                                    VALUES (?, ?, ?, ?, ?)
+                                    INSERT INTO level1_clusters (category_id, version, l1_cluster_id, title)
+                                    VALUES (?, ?, ?, ?)
                                     RETURNING id
                                     """,
                                     [
                                         category_db_id,
-                                        subcluster_title,
-                                        len(subcluster_texts),
-                                        (
-                                            len(subcluster_texts)
-                                            / len(cluster_texts)
-                                            * 100
-                                            if len(cluster_texts) > 0
-                                            else 0
-                                        ),
-                                        version,  # Add version value
+                                        version,
+                                        int(l1_id_local),  # L1 HDBSCAN ID
+                                        level1_title,
                                     ],
                                 )
-                                sub_result = subcluster_conn.fetchone()
-                                if sub_result:
-                                    subcluster_db_id = sub_result[0]
+                                l1_result = l1_conn.fetchone()
+                                if l1_result:
+                                    level1_cluster_db_id = l1_result[0]
                                     logger.info(
-                                        f"Inserted subcluster ID {subcluster_db_id} with title '{subcluster_title}' for category {category_db_id}, dataset {dataset_id}, version {version}."
-                                    )  # Added Log
+                                        f"Inserted Level1Cluster ID {level1_cluster_db_id} with title '{level1_title}' for category {category_db_id}, dataset {dataset_id}, version {version}."
+                                    )
                                 else:
                                     raise Exception(
-                                        "Subcluster insertion did not return an ID."
+                                        "Level1Cluster insertion did not return an ID."
                                     )
 
-                                # Insert text-subcluster relationships
-                                with retry_on_lock() as text_cluster_conn:
-                                    for text, prob in zip(
-                                        subcluster_texts, subcluster_probs_filtered
-                                    ):
-                                        membership_score = (
-                                            float(prob)
-                                            if isinstance(
-                                                prob, (np.float32, np.float64)
-                                            )
-                                            else prob
-                                        )
-                                        text_cluster_conn.execute(
-                                            """
-                                            INSERT INTO text_clusters (text_id, subcluster_id, membership_score)
-                                            SELECT t.id, ?, ?
-                                            FROM texts t
-                                            WHERE t.dataset_id = ? AND t.text = ?
-                                            ON CONFLICT (text_id, subcluster_id) 
-                                            DO UPDATE SET membership_score = ?
-                                            """,
-                                            [
-                                                subcluster_db_id,
-                                                membership_score,
-                                                dataset_id,
-                                                text,
-                                                membership_score,
-                                            ],
-                                        )
-                        except Exception as e_sub:
-                            logger.error(
-                                f"Failed to process subcluster '{subcluster_title}' (local ID {sub_id_local}) for category {category_db_id}, dataset {dataset_id}: {e_sub}"
-                            )
-                            # Continue to next subcluster even if one fails
+                            # --- Insert text-assignments using main SQLAlchemy session 'db' ---
+                            # First, delete any existing assignments for these texts in this version
+                            for text_content in l1_cluster_texts:
+                                # Find the text_id by querying the TextDB table directly
+                                text_query = sql_text(
+                                    """
+                                    SELECT id FROM texts 
+                                    WHERE dataset_id = :dataset_id AND text = :text_content
+                                    """
+                                )
+                                text_result = db.execute(
+                                    text_query,
+                                    {
+                                        "dataset_id": dataset_id,
+                                        "text_content": text_content,
+                                    },
+                                ).fetchone()
 
-                except Exception as e_cluster:
+                                if text_result:
+                                    text_id = text_result[0]
+                                    # Delete existing assignment for this text_id and version
+                                    delete_query = sql_text(
+                                        """
+                                        DELETE FROM text_assignments
+                                        WHERE text_id = :text_id AND version = :version
+                                        """
+                                    )
+                                    db.execute(
+                                        delete_query,
+                                        {"text_id": text_id, "version": version},
+                                    )
+
+                            # Now insert new assignments
+                            for i, text_content in enumerate(l1_cluster_texts):
+                                # Ensure probabilities are float
+                                l1_prob = (
+                                    float(l1_probs_filtered[i])
+                                    if i < len(l1_probs_filtered)
+                                    else 0.0
+                                )
+                                l2_prob = (
+                                    float(l2_probs_filtered[i])
+                                    if i < len(l2_probs_filtered)
+                                    else 0.0
+                                )
+                                # Simple insert without ON CONFLICT
+                                insert_sql = sql_text(
+                                    """
+                                    INSERT INTO text_assignments (text_id, version, level1_cluster_id, l1_probability, l2_probability)
+                                    SELECT t.id, :version, :l1_cluster_db_id, :l1_prob, :l2_prob
+                                    FROM texts t
+                                    WHERE t.dataset_id = :dataset_id AND t.text = :text_content
+                                    """
+                                )
+                                db.execute(
+                                    insert_sql,
+                                    {
+                                        "version": version,
+                                        "l1_cluster_db_id": level1_cluster_db_id,
+                                        "l1_prob": l1_prob,
+                                        "l2_prob": l2_prob,
+                                        "dataset_id": dataset_id,
+                                        "text_content": text_content,
+                                    },
+                                )
+
+                            # Commit after processing each L1 cluster to ensure assignments are saved
+                            try:
+                                db.commit()
+                                logger.info(
+                                    f"Committed assignments for {len(l1_cluster_texts)} texts for L1 cluster {level1_cluster_db_id}"
+                                )
+                            except Exception as commit_error:
+                                logger.error(
+                                    f"Error committing assignments for L1 cluster {level1_cluster_db_id}: {commit_error}"
+                                )
+                                db.rollback()
+                                raise
+
+                        except Exception as e_l1:
+                            logger.error(
+                                f"Failed to process Level1Cluster '{level1_title}' (local L1 ID {l1_id_local}) for category {category_db_id}, dataset {dataset_id}: {e_l1}"
+                            )
+                            db.rollback()  # Rollback if insert fails
+                            # Continue to next L1 cluster even if one fails
+
+                    # ---- Handle remaining L1 clustering noise ----
+                    l1_noise_mask_local = l1_clusters_local == -1
+                    num_l1_noise = np.sum(l1_noise_mask_local)
+
+                    if num_l1_noise > 0:
+                        logger.info(
+                            f"Handling {num_l1_noise} remaining L1 noise points for category {category_db_id} by creating/using miscellaneous Level1Cluster."
+                        )
+                        l1_noise_indices_local = np.where(l1_noise_mask_local)[0]
+                        # Map local L1 noise indices back to original text list indices
+                        original_l1_noise_indices = cluster_indices[
+                            l1_noise_indices_local
+                        ]
+                        l1_noise_texts = [texts[i] for i in original_l1_noise_indices]
+                        # Get L2 probabilities corresponding to the L1 noise texts
+                        l2_noise_probs = l2_probabilities_for_category[
+                            l1_noise_indices_local
+                        ]
+
+                        if l1_noise_texts:
+                            misc_l1_title = (
+                                f"Miscellaneous {category_name}"  # Renamed variable
+                            )
+                            misc_l1_cluster_db_id = None  # Renamed variable
+                            try:
+                                # --- Insert misc Level1Cluster using retry_on_lock (keep for this) ---
+                                with retry_on_lock() as misc_conn:
+                                    # Insert misc Level1Cluster
+                                    misc_conn.execute(
+                                        """
+                                        INSERT INTO level1_clusters (category_id, version, l1_cluster_id, title)
+                                        VALUES (?, ?, ?, ?)
+                                        RETURNING id
+                                        """,
+                                        [
+                                            category_db_id,
+                                            version,
+                                            -1,  # Use -1 for L1 noise cluster ID
+                                            misc_l1_title,
+                                        ],
+                                    )
+                                    result = misc_conn.fetchone()
+                                    if result:
+                                        misc_l1_cluster_db_id = result[0]
+                                        logger.info(
+                                            f"Inserted miscellaneous Level1Cluster ID {misc_l1_cluster_db_id} for category {category_db_id}, version {version}."
+                                        )
+                                    else:
+                                        raise Exception(
+                                            "Misc Level1Cluster insertion failed."
+                                        )
+
+                                # --- Insert text-assignments for L1 noise using main SQLAlchemy session 'db' ---
+                                # First, delete any existing assignments for these noise texts in this version
+                                for text_content in l1_noise_texts:
+                                    # Find the text_id by querying the TextDB table directly
+                                    text_query = sql_text(
+                                        """
+                                        SELECT id FROM texts 
+                                        WHERE dataset_id = :dataset_id AND text = :text_content
+                                        """
+                                    )
+                                    text_result = db.execute(
+                                        text_query,
+                                        {
+                                            "dataset_id": dataset_id,
+                                            "text_content": text_content,
+                                        },
+                                    ).fetchone()
+
+                                    if text_result:
+                                        text_id = text_result[0]
+                                        # Delete existing assignment for this text_id and version
+                                        delete_query = sql_text(
+                                            """
+                                            DELETE FROM text_assignments
+                                            WHERE text_id = :text_id AND version = :version
+                                            """
+                                        )
+                                        db.execute(
+                                            delete_query,
+                                            {"text_id": text_id, "version": version},
+                                        )
+
+                                # Now insert noise assignments
+                                for i, text_content in enumerate(l1_noise_texts):
+                                    # Use L2 probability as both L1 and L2 prob here
+                                    l1_prob = (
+                                        float(l2_noise_probs[i])
+                                        if i < len(l2_noise_probs)
+                                        else 0.0
+                                    )
+                                    l2_prob = (
+                                        float(l2_noise_probs[i])
+                                        if i < len(l2_noise_probs)
+                                        else 0.0
+                                    )
+                                    # Simple insert without ON CONFLICT
+                                    insert_sql_noise = sql_text(
+                                        """
+                                        INSERT INTO text_assignments (text_id, version, level1_cluster_id, l1_probability, l2_probability)
+                                        SELECT t.id, :version, :l1_cluster_db_id, :l1_prob, :l2_prob
+                                        FROM texts t
+                                        WHERE t.dataset_id = :dataset_id AND t.text = :text_content
+                                        """
+                                    )
+                                    db.execute(
+                                        insert_sql_noise,
+                                        {
+                                            "version": version,
+                                            "l1_cluster_db_id": misc_l1_cluster_db_id,
+                                            "l1_prob": l1_prob,
+                                            "l2_prob": l2_prob,
+                                            "dataset_id": dataset_id,
+                                            "text_content": text_content,
+                                        },
+                                    )
+
+                                # Commit after processing noise to ensure assignments are saved
+                                try:
+                                    db.commit()
+                                    logger.info(
+                                        f"Committed assignments for {len(l1_noise_texts)} noise texts to misc L1 cluster {misc_l1_cluster_db_id}"
+                                    )
+                                except Exception as commit_error:
+                                    logger.error(
+                                        f"Error committing noise assignments: {commit_error}"
+                                    )
+                                    db.rollback()
+                                    raise
+                            except Exception as e_misc_l1:  # Renamed variable
+                                logger.error(
+                                    f"Failed to create or link miscellaneous Level1Cluster for category {category_db_id}: {e_misc_l1}"
+                                )
+                                db.rollback()  # Rollback if insert fails
+                    # ---- END: Handle L1 noise ----
+
+                except Exception as e_l1_clustering:  # Renamed variable
                     logger.error(
-                        f"Failed to subcluster category {category_db_id} (cluster {cluster_id}), dataset {dataset_id}: {e_cluster}. Creating single fallback subcluster."
+                        f"Failed Level 1 clustering for category {category_db_id} (L2 cluster {l2_cluster_id_hdbscan}), dataset {dataset_id}: {e_l1_clustering}. Creating single fallback Level1Cluster."
                     )
-                    # Fallback: Create a single subcluster for the whole category if subclustering fails
-                    await create_single_subcluster(
+                    # Fallback: Create a single Level1Cluster if L1 clustering fails
+                    await create_single_level1_cluster(  # Call renamed helper
                         category_db_id,
                         cluster_texts,
-                        cluster_probs,
+                        l2_probabilities_for_category,  # Pass L2 probs
                         dataset_id,
                         version,
                     )
 
             else:
-                # If cluster is too small or failed conditions for subclustering, create one subcluster
+                # If L2 category cluster is too small or failed checks for L1 clustering, create one Level1Cluster
                 logger.info(
-                    f"Creating single subcluster for category {category_db_id} (cluster {cluster_id}), dataset {dataset_id} as it's too small or failed checks."
+                    f"Creating single Level1Cluster for category {category_db_id} (L2 cluster {l2_cluster_id_hdbscan}), dataset {dataset_id} as L1 clustering was skipped."
                 )
-                await create_single_subcluster(
-                    category_db_id, cluster_texts, cluster_probs, dataset_id, version
+                await create_single_level1_cluster(  # Call renamed helper
+                    category_db_id,
+                    cluster_texts,
+                    l2_probabilities_for_category,
+                    dataset_id,
+                    version,
                 )
 
             del cluster_embeddings  # Clean up memory
             gc.collect()
             logger.info(
-                f"Finished processing cluster {cluster_id} for dataset {dataset_id}."
+                f"Finished processing L2 category cluster {l2_cluster_id_hdbscan} for dataset {dataset_id}."
             )
 
         del embeddings_array, clusters, probabilities  # Free large numpy arrays
         gc.collect()
-        logger.info(f"Finished all cluster processing for dataset {dataset_id}.")
+        logger.info(
+            f"Finished all category and cluster processing for dataset {dataset_id}."
+        )
 
         # Final DB updates and return using the main SQLAlchemy session `db`
         try:
@@ -663,6 +827,7 @@ async def cluster_texts(
             )
             if dataset:
                 dataset.is_clustered = True
+                # dataset.clustering_status = 'completed' # Status is updated in the background task runner
                 db.commit()
                 logger.info(f"Committed is_clustered=True for dataset {dataset_id}.")
             else:
@@ -673,92 +838,63 @@ async def cluster_texts(
 
             # Get final results using the original SQLAlchemy session
             final_categories = (
-                db.query(Category).filter(Category.dataset_id == dataset_id).all()
+                db.query(Category)
+                .options(joinedload(Category.level1_clusters))  # Eager load L1 clusters
+                .filter(Category.dataset_id == dataset_id, Category.version == version)
+                .all()
             )
-            if final_categories:
-                final_subclusters = (
-                    db.query(Subcluster)
-                    .filter(
-                        Subcluster.category_id.in_([c.id for c in final_categories])
-                    )
-                    .all()
-                )
-            else:
-                final_subclusters = []
+            # No need to query Level1Cluster separately if eager loaded
+            # final_level1_clusters = []
+            # if final_categories:
+            #     category_ids = [c.id for c in final_categories]
+            #     final_level1_clusters = (
+            #         db.query(Level1Cluster)
+            #         .filter(Level1Cluster.category_id.in_(category_ids), Level1Cluster.version == version)
+            #         .all()
+            #     )
 
             logger.info(
-                f"Successfully fetched {len(final_categories)} categories and {len(final_subclusters)} subclusters for dataset {dataset_id}."
+                f"Successfully fetched {len(final_categories)} categories (with L1 clusters eager loaded) for dataset {dataset_id}, version {version}."
             )
-            return final_categories, final_subclusters
+
+            # The background task runner expects (categories, subclusters), but subclusters are now Level1Clusters
+            # For now, return categories only, assuming the runner handles this.
+            # Alternatively, adjust the runner `run_clustering_task`
+            return final_categories, []  # Return empty list for second element for now
 
         except Exception as e_final:
             logger.error(
                 f"Failed during final DB update/fetch for dataset {dataset_id}: {e_final}"
             )
-            db.rollback()  # Rollback potential partial commit
-            # Fallback: Try fetching directly via DuckDB connection as results might be committed partially
-            logger.warning(
-                f"Attempting fallback fetch for dataset {dataset_id} via direct DuckDB connection."
-            )
-            try:
-                with retry_on_lock() as final_conn:
-                    cats_raw = final_conn.execute(
-                        "SELECT id, name, total_rows, percentage FROM categories WHERE dataset_id = ?",
-                        [dataset_id],
-                    ).fetchall()
-                    cat_ids = [c[0] for c in cats_raw]
-                    # Basic conversion - assumes Category/Subcluster are simple data holders
-                    final_categories = [
-                        Category(
-                            id=c[0],
-                            name=c[1],
-                            total_rows=c[2],
-                            percentage=c[3],
-                            dataset_id=dataset_id,
-                        )
-                        for c in cats_raw
-                    ]
-
-                    if cat_ids:
-                        subs_raw = final_conn.execute(
-                            f"SELECT id, category_id, title, row_count, percentage FROM subclusters WHERE category_id IN ({','.join(['?']*len(cat_ids))})",
-                            cat_ids,
-                        ).fetchall()
-                        final_subclusters = [
-                            Subcluster(
-                                id=s[0],
-                                category_id=s[1],
-                                title=s[2],
-                                row_count=s[3],
-                                percentage=s[4],
-                            )
-                            for s in subs_raw
-                        ]
-                    else:
-                        final_subclusters = []
-                    logger.info(
-                        f"Fallback fetch successful for dataset {dataset_id}: got {len(final_categories)} categories, {len(final_subclusters)} subclusters."
-                    )
-                    return final_categories, final_subclusters
-            except Exception as e_fallback:
-                logger.error(
-                    f"Fallback fetch failed for dataset {dataset_id}: {e_fallback}"
-                )
-                return [], []  # Return empty if fallback also fails
+            db.rollback()
+            raise
 
     except Exception as e:
-        logger.exception(
-            f"CRITICAL error during clustering for dataset {dataset_id}: {str(e)}"
-        )
-        # Ensure DB session is rolled back in case of critical failure before returning
+        logger.error(f"Error in clustering process for dataset {dataset_id}: {str(e)}")
+        # Attempt to clean up DB entries for this version if clustering failed mid-way
         try:
-            db.rollback()
+            # Delete TextAssignments first
+            db.query(TextAssignment).filter(
+                TextAssignment.version == version,
+                TextAssignment.text.has(TextDB.dataset_id == dataset_id),
+            ).delete(synchronize_session=False)
+            # Delete Level1Clusters
+            db.query(Level1Cluster).filter(
+                Level1Cluster.version == version,
+                Level1Cluster.category.has(Category.dataset_id == dataset_id),
+            ).delete(synchronize_session=False)
+            # Delete Categories
+            db.query(Category).filter(
+                Category.version == version, Category.dataset_id == dataset_id
+            ).delete(synchronize_session=False)
+            # Delete orphaned Texts? Maybe not safe.
+            db.commit()
             logger.info(
-                f"Rolled back SQLAlchemy session due to critical error for dataset {dataset_id}."
+                f"Cleaned up partial results for failed clustering version {version} of dataset {dataset_id}."
             )
-        except Exception as e_rollback:
+        except Exception as cleanup_e:
             logger.error(
-                f"Failed to rollback SQLAlchemy session for dataset {dataset_id}: {e_rollback}"
+                f"Failed to cleanup partial results for version {version} dataset {dataset_id}: {cleanup_e}"
             )
-        # Return empty lists as the process failed critically
-        return [], []
+            db.rollback()
+        raise

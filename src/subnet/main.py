@@ -27,9 +27,9 @@ if not os.environ.get("OPENROUTER_API_KEY"):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("FastAPI app is starting up")
-    logger.info("Registered routes during startup:")
-    for route in app.routes:
-        logger.info(f"Path: {route.path}, Methods: {route.methods}")
+    # logger.info("Registered routes during startup:") # Commented out
+    # for route in app.routes: # Commented out
+    #     logger.info(f"Path: {route.path}, Methods: {route.methods}") # Commented out
     yield
     logger.info("FastAPI app is shutting down")
 

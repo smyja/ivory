@@ -30,8 +30,11 @@ interface Dataset {
   subset: string | null;
   split: string | null;
   status: string;
-  download_date: string;
+  download_date?: string;
+  created_at?: string;
   clustering_status?: string;
+  is_clustered?: boolean;
+  latest_version?: number | null;
 }
 
 export default function DatasetsPage() {
@@ -178,8 +181,20 @@ export default function DatasetsPage() {
     }
   };
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString();
+  const formatDate = (dateString: string | undefined) => {
+    if (!dateString) return 'N/A';
+
+    try {
+      const date = new Date(dateString);
+      // Check if the date is valid (not NaN)
+      if (isNaN(date.getTime())) {
+        return 'Invalid date';
+      }
+      return date.toLocaleDateString();
+    } catch (error) {
+      console.error('Error formatting date:', error);
+      return 'Invalid date';
+    }
   };
 
   // Filter the data based on the selected status
@@ -310,7 +325,7 @@ export default function DatasetsPage() {
                       )}
                     </Table.Td>
                     <Table.Td>
-                      <Text size="sm">{formatDate(dataset.download_date)}</Text>
+                      {formatDate(dataset.download_date || dataset.created_at)}
                     </Table.Td>
                     <Table.Td>
                       <Group gap="xs" wrap="nowrap">

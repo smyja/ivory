@@ -246,7 +246,7 @@ const DatasetView: React.FC = () => {
       setIsInitialLoading(true);
       setLoading(true);
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/datasets/subclusters/${subclusterId}/texts`
+        `${process.env.NEXT_PUBLIC_API_URL}/level1_clusters/${subclusterId}/texts`
       );
 
       if (!response.ok) {

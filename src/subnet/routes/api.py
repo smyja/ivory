@@ -1,23 +1,29 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
-from typing import List, Dict
+from typing import List, Dict, Union, Any
 from models import (
     TextDB,
     CategoryResponse,
-    SubclusterResponse,
     Category,
-    Subcluster,
-    TextCluster,
+    Level1Cluster,
+    Level1ClusterResponse,
+    TextAssignment,
+    TextDBResponse,
 )
 from utils.clustering import cluster_texts
 from utils.database import get_db, get_duckdb_connection
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 import logging
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-@router.post("/cluster", response_model=Dict[str, List])
+@router.post(
+    "/cluster",
+    response_model=Dict[
+        str, Union[List[CategoryResponse], List[Level1ClusterResponse]]
+    ],
+)
 async def cluster_texts_endpoint(
     texts: List[str],
     background_tasks: BackgroundTasks,
@@ -25,15 +31,20 @@ async def cluster_texts_endpoint(
     dataset_id: int = 0,  # Use 0 as a default for standalone clustering
 ):
     """
-    Cluster texts into hierarchical categories and subclusters.
-    Returns both categories and their subclusters.
+    Cluster texts into hierarchical categories and level-1 clusters.
+    Returns both categories and their level-1 clusters.
     """
     try:
-        categories, subclusters = await cluster_texts(texts, db, dataset_id)
+        categories, level1_clusters_or_any = await cluster_texts(texts, db, dataset_id)
+
+        level1_clusters = (
+            level1_clusters_or_any if isinstance(level1_clusters_or_any, list) else []
+        )
+
         return {
             "categories": [CategoryResponse.model_validate(cat) for cat in categories],
-            "subclusters": [
-                SubclusterResponse.model_validate(sub) for sub in subclusters
+            "level1_clusters": [
+                Level1ClusterResponse.model_validate(l1) for l1 in level1_clusters
             ],
         }
     except Exception as e:
@@ -53,85 +64,92 @@ async def list_categories(db: Session = Depends(get_db)):
 
 
 @router.get(
-    "/categories/{category_id}/subclusters", response_model=List[SubclusterResponse]
+    "/categories/{category_id}/level1_clusters",
+    response_model=List[Level1ClusterResponse],
 )
-async def list_subclusters(category_id: int, db: Session = Depends(get_db)):
-    """List all subclusters for a specific category."""
+async def list_level1_clusters(category_id: int, db: Session = Depends(get_db)):
+    """List all Level 1 clusters for a specific category."""
     try:
-        subclusters = (
-            db.query(Subcluster).filter(Subcluster.category_id == category_id).all()
+        level1_clusters = (
+            db.query(Level1Cluster)
+            .filter(Level1Cluster.category_id == category_id)
+            .all()
         )
-        if not subclusters:
-            raise HTTPException(
-                status_code=404,
-                detail=f"No subclusters found for category {category_id}",
+        if not level1_clusters:
+            category_exists = (
+                db.query(Category.id).filter(Category.id == category_id).first()
             )
-        return [SubclusterResponse.model_validate(sub) for sub in subclusters]
+            if not category_exists:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Category {category_id} not found",
+                )
+            logger.info(f"No Level 1 clusters found for category {category_id}")
+            return []
+
+        return [Level1ClusterResponse.model_validate(l1) for l1 in level1_clusters]
     except Exception as e:
-        logger.exception(f"Error listing subclusters: {str(e)}")
+        logger.exception(f"Error listing level 1 clusters: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/subclusters/{subcluster_id}/texts")
-async def list_subcluster_texts(subcluster_id: int):
-    """List all texts in a specific subcluster."""
+@router.get("/level1_clusters/{level1_cluster_id}/texts", response_model=Dict[str, Any])
+async def list_level1_cluster_texts(
+    level1_cluster_id: int, db: Session = Depends(get_db)
+):
+    """List all texts assigned to a specific Level 1 cluster."""
     try:
-        logger.info(f"Fetching texts for subcluster {subcluster_id}")
+        logger.info(f"Fetching texts for Level 1 cluster {level1_cluster_id}")
 
-        with get_duckdb_connection() as conn:
-            # First check if subcluster exists
-            subcluster = conn.execute(
-                "SELECT * FROM subclusters WHERE id = ?", [subcluster_id]
-            ).fetchone()
+        level1_cluster = (
+            db.query(Level1Cluster)
+            .filter(Level1Cluster.id == level1_cluster_id)
+            .first()
+        )
 
-            if not subcluster:
-                logger.error(f"Subcluster {subcluster_id} not found")
-                raise HTTPException(
-                    status_code=404, detail=f"Subcluster {subcluster_id} not found"
-                )
-
-            logger.info(f"Found subcluster: {subcluster}")
-
-            # Count how many text_clusters entries exist for this subcluster
-            count = conn.execute(
-                "SELECT COUNT(*) FROM text_clusters WHERE subcluster_id = ?",
-                [subcluster_id],
-            ).fetchone()[0]
-
-            logger.info(
-                f"Found {count} text_clusters entries for subcluster {subcluster_id}"
+        if not level1_cluster:
+            logger.error(f"Level 1 cluster {level1_cluster_id} not found")
+            raise HTTPException(
+                status_code=404, detail=f"Level 1 cluster {level1_cluster_id} not found"
             )
 
-            # Query texts with their membership scores
-            texts_with_scores = conn.execute(
-                """
-                SELECT t.id, t.text, tc.membership_score
-                FROM texts t
-                JOIN text_clusters tc ON t.id = tc.text_id
-                WHERE tc.subcluster_id = ?
-                ORDER BY tc.membership_score DESC
-            """,
-                [subcluster_id],
-            ).fetchall()
+        logger.info(f"Found Level 1 cluster: {level1_cluster.title}")
 
-            logger.info(
-                f"Retrieved {len(texts_with_scores)} texts for subcluster {subcluster_id}"
-            )
+        assignments = (
+            db.query(TextAssignment, TextDB)
+            .join(TextDB, TextAssignment.text_id == TextDB.id)
+            .filter(TextAssignment.level1_cluster_id == level1_cluster_id)
+            .order_by(TextAssignment.l1_probability.desc())
+            .all()
+        )
 
-            return {
-                "subcluster": {
-                    "id": subcluster[0],  # id
-                    "title": subcluster[2],  # title
-                    "row_count": subcluster[3],  # row_count
-                    "percentage": subcluster[4],  # percentage
-                },
-                "texts": [
-                    {"id": t[0], "text": t[1], "membership_score": t[2]}
-                    for t in texts_with_scores
-                ],
+        logger.info(
+            f"Retrieved {len(assignments)} text assignments for Level 1 cluster {level1_cluster_id}"
+        )
+
+        texts_data = [
+            {
+                "id": text.id,
+                "text": text.text,
+                "assignment_id": assignment.id,
+                "l1_probability": assignment.l1_probability,
+                "l2_probability": assignment.l2_probability,
             }
+            for assignment, text in assignments
+        ]
+
+        return {
+            "level1_cluster": {
+                "id": level1_cluster.id,
+                "l1_cluster_id": level1_cluster.l1_cluster_id,
+                "title": level1_cluster.title,
+                "category_id": level1_cluster.category_id,
+                "version": level1_cluster.version,
+            },
+            "texts": texts_data,
+        }
     except Exception as e:
         logger.exception(
-            f"Error listing texts for subcluster {subcluster_id}: {str(e)}"
+            f"Error listing texts for Level 1 cluster {level1_cluster_id}: {str(e)}"
         )
         raise HTTPException(status_code=500, detail=str(e))

@@ -10,8 +10,8 @@ interface ClusteringHistory {
   id: number;
   dataset_id: number;
   dataset_name: string;
+  version: number;
   clustering_status: 'queued' | 'processing' | 'completed' | 'failed';
-  titling_status: 'not_started' | 'in_progress' | 'completed' | 'failed';
   created_at: string;
   completed_at: string | null;
   error_message?: string;
@@ -51,18 +51,27 @@ export function ClusteringTable({ selectedStatus, history }: ClusteringTableProp
     currentPage * itemsPerPage
   );
 
-  const getStatusColor = (status: string) => {
+  const getStatusColor = (status: string | undefined | null): string => {
+    // Handle undefined or null status gracefully
+    if (!status) {
+      return 'gray'; // Return a default color if status is missing
+    }
+
     switch (status.toLowerCase()) {
       case 'completed':
         return 'green';
       case 'processing':
-      case 'in_progress':
+      case 'queued':
+      case 'started':
+      case 'embedding':
+      case 'clustering_l1':
+      case 'titling_l1':
+      case 'clustering_l2':
+      case 'naming_l2':
+      case 'saving':
         return 'blue';
       case 'failed':
         return 'red';
-      case 'queued':
-      case 'not_started':
-        return 'black';
       default:
         return 'gray';
     }
@@ -89,13 +98,6 @@ export function ClusteringTable({ selectedStatus, history }: ClusteringTableProp
           )}
         </Group>
       </Table.Td>
-      <Table.Td>
-        <IndicatorBadge
-          color={getStatusColor(row.titling_status)}
-          label={row.titling_status}
-          processing={row.titling_status === 'in_progress'}
-        />
-      </Table.Td>
       <Table.Td>{formatDate(row.created_at)}</Table.Td>
       <Table.Td>{formatDate(row.completed_at)}</Table.Td>
       <Table.Td>
@@ -105,7 +107,7 @@ export function ClusteringTable({ selectedStatus, history }: ClusteringTableProp
           color="black"
           radius="md"
           rightSection={<IconExternalLink size={14} />}
-          onClick={() => router.push(`/dashboard/datasets/cluster?id=${row.dataset_id}`)}
+          onClick={() => router.push(`/dashboard/datasets/cluster?id=${row.dataset_id}&version=${row.version}`)}
           disabled={row.clustering_status !== 'completed'}
           styles={{
             root: {
@@ -150,7 +152,6 @@ export function ClusteringTable({ selectedStatus, history }: ClusteringTableProp
         <Group p="md" style={{ backgroundColor: '#f8f9fa' }}>
           <Text fw={500} c="dimmed" style={{ flex: 1 }}>Dataset</Text>
           <Text fw={500} c="dimmed" style={{ flex: 1 }}>Clustering Status</Text>
-          <Text fw={500} c="dimmed" style={{ flex: 1 }}>Titling Status</Text>
           <Text fw={500} c="dimmed" style={{ flex: 1 }}>Started At</Text>
           <Text fw={500} c="dimmed" style={{ flex: 1 }}>Completed At</Text>
           <Text fw={500} c="dimmed" style={{ flex: 1 }}>Actions</Text>

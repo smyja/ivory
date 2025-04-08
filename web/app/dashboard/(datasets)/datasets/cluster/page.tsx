@@ -7,26 +7,39 @@ import { IconArrowUpRight, IconArrowDownRight } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import classes from './ClusterView.module.css';
 
-interface Category {
-    id: number;
-    name: string | null;
-    total_rows: number;
-    percentage: number;
-    subclusters: Subcluster[];
-}
-
-interface Subcluster {
-    id: number;
-    title: string | null;
-    row_count: number;
-    percentage: number;
-    texts: Text[];
-}
-
-interface Text {
+interface TextDBResponse {
     id: number;
     text: string;
-    membership_score: number;
+    // Add other fields if they exist in your TextDBResponse model
+}
+
+interface Level1ClusterResponse {
+    id: number;
+    l1_cluster_id: number;
+    title: string | null;
+    texts: TextDBResponse[];
+    text_count: number;
+}
+
+interface CategoryResponse {
+    id: number;
+    name: string | null;
+    l2_cluster_id?: number; // Make optional or adjust based on your model
+    level1_clusters: Level1ClusterResponse[];
+    category_text_count: number;
+}
+
+interface DatasetDetailResponse {
+    // Inherited fields from DatasetMetadataResponse
+    id: number;
+    name: string;
+    // ... other metadata fields
+    latest_version: number | null;
+    categories: CategoryResponse[] | null;
+    dataset_total_texts: number | null;
+    // Add status fields if needed
+    status?: string;
+    clustering_status?: string;
 }
 
 interface TitlingStatus {
@@ -36,6 +49,13 @@ interface TitlingStatus {
     };
 }
 
+function calculatePercentage(part: number | null | undefined, total: number | null | undefined): number {
+    if (total && total > 0 && part != null) {
+        return (part / total) * 100;
+    }
+    return 0; // Return 0 if calculation isn't possible
+}
+
 export default function ClusterView() {
     const searchParams = useSearchParams();
     const router = useRouter();
@@ -43,20 +63,18 @@ export default function ClusterView() {
     const versionParam = searchParams.get('version');
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const [categories, setCategories] = useState<Category[]>([]);
+    const [datasetDetails, setDatasetDetails] = useState<DatasetDetailResponse | null>(null);
     const [titlingStatus, setTitlingStatus] = useState<TitlingStatus>({});
     const [currentPage, setCurrentPage] = useState<{ [key: number]: number }>({});
-    const [subclusterPages, setSubclusterPages] = useState<{ [key: number]: number }>({});
-    const [versions, setVersions] = useState<{ id: number; version: number; created_at: string }[]>([]);
+    const [versions, setVersions] = useState<number[]>([]);
     const [selectedVersion, setSelectedVersion] = useState<number | null>(versionParam ? parseInt(versionParam) : null);
-    const ITEMS_PER_PAGE = 6;
     const SUBCLUSTERS_PER_PAGE = 5;
 
     const handleSubclusterClick = (subclusterId: number) => {
         router.push(`/dashboard/datasets/view?id=${datasetId}&subcluster=${subclusterId}`);
     };
 
-    const requestTitling = async (clusterId: number, texts: Text[]) => {
+    const requestTitling = async (clusterId: number, texts: TextDBResponse[]) => {
         const key = `cluster-${clusterId}`;
         try {
             // Check if we're already titling this cluster
@@ -99,15 +117,17 @@ export default function ClusterView() {
             }));
 
             // Update the cluster title in categories
-            setCategories(prev => {
-                return prev.map(category => ({
+            setDatasetDetails(prevDetails => {
+                if (!prevDetails || !prevDetails.categories) return prevDetails;
+                const updatedCategories = prevDetails.categories.map(category => ({
                     ...category,
-                    subclusters: category.subclusters.map(subcluster =>
-                        subcluster.id === clusterId
-                            ? { ...subcluster, title: data.title }
-                            : subcluster
+                    level1_clusters: category.level1_clusters.map(level1Cluster =>
+                        level1Cluster.id === clusterId
+                            ? { ...level1Cluster, title: data.title }
+                            : level1Cluster
                     )
                 }));
+                return { ...prevDetails, categories: updatedCategories };
             });
 
         } catch (error) {
@@ -144,15 +164,17 @@ export default function ClusterView() {
                 }));
 
                 // Update the cluster title in categories
-                setCategories(prev => {
-                    return prev.map(category => ({
+                setDatasetDetails(prevDetails => {
+                    if (!prevDetails || !prevDetails.categories) return prevDetails;
+                    const updatedCategories = prevDetails.categories.map(category => ({
                         ...category,
-                        subclusters: category.subclusters.map(subcluster =>
-                            subcluster.id === clusterId
-                                ? { ...subcluster, title: data.title }
-                                : subcluster
+                        level1_clusters: category.level1_clusters.map(level1Cluster =>
+                            level1Cluster.id === clusterId
+                                ? { ...level1Cluster, title: data.title }
+                                : level1Cluster
                         )
                     }));
+                    return { ...prevDetails, categories: updatedCategories };
                 });
             }
         } catch (error) {
@@ -161,136 +183,134 @@ export default function ClusterView() {
     };
 
     const fetchClusters = async () => {
+        if (!datasetId) return;
+        setLoading(true);
+        setError(null);
         try {
-            const url = new URL(`${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}/clusters`);
+            const url = new URL(`${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}/details`);
             if (selectedVersion) {
                 url.searchParams.append('version', selectedVersion.toString());
             }
 
             const response = await fetch(url.toString());
             if (!response.ok) {
-                throw new Error('Failed to fetch clusters');
+                const errorData = await response.json().catch(() => ({ detail: 'Failed to fetch clusters' }));
+                throw new Error(errorData.detail || 'Failed to fetch clusters');
             }
-            const data = await response.json();
+            const data: DatasetDetailResponse = await response.json();
 
-            if (data.status === 'in_progress') {
+            console.log('API Response for clusters/details:', {
+                url: url.toString(),
+                data,
+            });
+
+            if (data.clustering_status === 'processing') {
                 notifications.show({
                     title: 'In Progress',
-                    message: 'Clustering is in progress. Please wait...',
+                    message: 'Clustering is in progress. Refreshing...',
                     color: 'yellow',
                 });
                 setTimeout(fetchClusters, 5000);
                 return;
             }
 
-            if (data.status === 'failed' || data.status === 'not_started') {
-                setError(data.status === 'failed' ? 'Clustering failed' : 'Clustering not started');
+            if (data.clustering_status === 'failed') {
+                setError('Clustering failed for this version.');
+                setDatasetDetails(data);
                 setLoading(false);
                 return;
             }
 
-            // Deduplicate categories and subclusters based on their IDs
-            const uniqueCategories = data.categories.reduce((acc: Category[], curr: Category) => {
-                if (!acc.find(c => c.id === curr.id)) {
-                    // Deduplicate subclusters within the category
-                    const uniqueSubclusters = curr.subclusters.reduce((subAcc: Subcluster[], subCurr: Subcluster) => {
-                        if (!subAcc.find(s => s.id === subCurr.id)) {
-                            subAcc.push(subCurr);
+            if (!data.categories || !Array.isArray(data.categories)) {
+                console.warn(`No categories found or invalid format for dataset ${datasetId}, version ${selectedVersion}`);
+                setDatasetDetails({ ...data, categories: [] });
+            } else {
+                setDatasetDetails(data);
+                data.categories.forEach((category: CategoryResponse) => {
+                    category.level1_clusters.forEach((level1Cluster: Level1ClusterResponse) => {
+                        if (!level1Cluster.title && level1Cluster.texts.length > 0 && !titlingStatus[`cluster-${level1Cluster.id}`]) {
+                            requestTitling(level1Cluster.id, level1Cluster.texts);
                         }
-                        return subAcc;
-                    }, []);
-
-                    acc.push({
-                        ...curr,
-                        subclusters: uniqueSubclusters
                     });
-                }
-                return acc;
-            }, []);
-
-            console.log('Original categories count:', data.categories.length);
-            console.log('Deduplicated categories count:', uniqueCategories.length);
-
-            setCategories(uniqueCategories);
-
-            // Request titling for each subcluster that doesn't have a title
-            uniqueCategories.forEach((category: Category) => {
-                category.subclusters.forEach((subcluster: Subcluster) => {
-                    if (!subcluster.title && subcluster.texts.length > 0) {
-                        requestTitling(subcluster.id, subcluster.texts);
-                    }
                 });
-            });
-
+            }
         } catch (error: any) {
-            setError(error.message);
+            console.error("Fetch Clusters Error:", error);
+            setError(error.message || 'An unexpected error occurred.');
+            setDatasetDetails(null);
         } finally {
             setLoading(false);
         }
     };
 
     const fetchVersions = async () => {
+        if (!datasetId) return;
         try {
             const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}/clustering/versions`);
             if (!response.ok) {
                 throw new Error('Failed to fetch clustering versions');
             }
-            const data = await response.json();
+            const data: number[] = await response.json();
             setVersions(data);
 
-            // If no version is selected, select the latest one
-            if (!selectedVersion && data.length > 0) {
-                const latestVersion = data[0].version;
+            if (selectedVersion === null && data.length > 0) {
+                const latestVersion = Math.max(...data);
                 setSelectedVersion(latestVersion);
-                router.push(`/dashboard/datasets/cluster?id=${datasetId}&version=${latestVersion}`);
+                router.replace(`/dashboard/datasets/cluster?id=${datasetId}&version=${latestVersion}`);
+            } else if (data.length === 0) {
+                setError("No completed clustering versions found for this dataset.");
             }
-        } catch (error) {
+        } catch (error: any) {
             console.error('Error fetching versions:', error);
+            setError(error.message || "Failed to load clustering versions.");
+            setVersions([]);
         }
     };
 
     useEffect(() => {
         if (datasetId) {
             fetchVersions();
+        }
+    }, [datasetId]);
+
+    useEffect(() => {
+        if (datasetId && selectedVersion !== null) {
             fetchClusters();
+        }
+        if (selectedVersion === null) {
+            setDatasetDetails(null);
         }
     }, [datasetId, selectedVersion]);
 
-    const getPagedSubclusters = (subclusters: Subcluster[], categoryId: number) => {
-        const page = currentPage[categoryId] || 1;
-        const start = (page - 1) * ITEMS_PER_PAGE;
-        const end = start + ITEMS_PER_PAGE;
-        return subclusters.slice(start, end);
-    };
-
-    const handlePageChange = (categoryId: number, page: number) => {
+    const handleSubclusterPageChange = (categoryId: number, page: number) => {
         setCurrentPage(prev => ({ ...prev, [categoryId]: page }));
     };
 
-    const handleSubclusterPageChange = (categoryId: number, page: number) => {
-        setSubclusterPages(prev => ({ ...prev, [categoryId]: page }));
-    };
-
-    const renderSubclusters = (subclusters: Subcluster[], categoryId: number) => {
-        const currentPage = subclusterPages[categoryId] || 1;
-        const startIndex = (currentPage - 1) * SUBCLUSTERS_PER_PAGE;
+    const renderLevel1Clusters = (
+        level1Clusters: Level1ClusterResponse[],
+        categoryId: number,
+        categoryTextCount: number
+    ) => {
+        const currentSubclusterPage = currentPage[categoryId] || 1;
+        const startIndex = (currentSubclusterPage - 1) * SUBCLUSTERS_PER_PAGE;
         const endIndex = startIndex + SUBCLUSTERS_PER_PAGE;
-        const paginatedSubclusters = subclusters.slice(startIndex, endIndex);
-        const totalPages = Math.ceil(subclusters.length / SUBCLUSTERS_PER_PAGE);
+        const paginatedLevel1Clusters = level1Clusters.slice(startIndex, endIndex);
+        const totalSubclusterPages = Math.ceil(level1Clusters.length / SUBCLUSTERS_PER_PAGE);
 
         return (
             <>
-                {paginatedSubclusters.map((subcluster) => {
-                    const titleStatus = titlingStatus[`cluster-${subcluster.id}`];
+                {paginatedLevel1Clusters.map((level1Cluster) => {
+                    const titleStatus = titlingStatus[`cluster-${level1Cluster.id}`];
+                    const subclusterPercentage = calculatePercentage(level1Cluster.text_count, categoryTextCount);
 
                     return (
                         <Paper
                             withBorder
                             p="md"
                             radius="md"
-                            key={subcluster.id}
+                            key={level1Cluster.id}
                             className={classes.subclusterCard}
-                            onClick={() => handleSubclusterClick(subcluster.id)}
+                            onClick={() => handleSubclusterClick(level1Cluster.id)}
                             style={{ cursor: 'pointer' }}
                         >
                             <Text className={classes.subclusterTitle} lineClamp={2}>
@@ -300,37 +320,37 @@ export default function ClusterView() {
                                         <span>Generating title...</span>
                                     </Group>
                                 ) : (
-                                    subcluster.title || titleStatus?.title || `Subcluster ${subcluster.id}`
+                                    level1Cluster.title || titleStatus?.title || `Subcluster ${level1Cluster.l1_cluster_id}`
                                 )}
                             </Text>
                             <div>
                                 <Group align="flex-end" gap="xs">
                                     <Text className={classes.value}>
-                                        {subcluster.row_count.toLocaleString()}
+                                        {level1Cluster.text_count.toLocaleString()}
                                     </Text>
-                                    <Text c={subcluster.percentage > 50 ? 'teal' : 'red'}
-                                        fz="sm"
-                                        fw={500}
-                                        className={classes.diff}>
-                                        <span>{subcluster.percentage.toFixed(1)}%</span>
-                                        {subcluster.percentage > 50 ?
+                                    <Text
+                                        c={subclusterPercentage > 50 ? 'teal' : 'red'}
+                                        fz="sm" fw={500} className={classes.diff}
+                                    >
+                                        <span>{subclusterPercentage.toFixed(1)}%</span>
+                                        {subclusterPercentage > 50 ?
                                             <IconArrowUpRight size="1rem" stroke={1.5} /> :
                                             <IconArrowDownRight size="1rem" stroke={1.5} />
                                         }
                                     </Text>
                                 </Group>
-                                <Text className={classes.categoryStats}>
+                                <Text fz="xs" c="dimmed" mt={2} className={classes.categoryStats}>
                                     rows in subcluster
                                 </Text>
                             </div>
                         </Paper>
                     );
                 })}
-                {totalPages > 1 && (
+                {totalSubclusterPages > 1 && (
                     <Group justify="center" mt="md">
                         <Pagination
-                            total={totalPages}
-                            value={currentPage}
+                            total={totalSubclusterPages}
+                            value={currentSubclusterPage}
                             onChange={(page) => handleSubclusterPageChange(categoryId, page)}
                             size="sm"
                         />
@@ -340,22 +360,44 @@ export default function ClusterView() {
         );
     };
 
-    if (loading) {
+    if (loading && !datasetDetails) {
         return (
-            <Container size="xl">
-                <div className="flex justify-center items-center h-screen">
-                    <Loader size="xl" />
-                </div>
+            <Container size="xl" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh' }}>
+                <Loader size="xl" />
             </Container>
         );
     }
 
     if (error) {
         return (
-            <Container size="xl">
-                <Alert color="red" title="Error">
-                    {error}
+            <Container size="xl" py="xl">
+                <Alert color="red" title="Error Loading Clusters">
+                    {error} - Try selecting a different version or refreshing.
                 </Alert>
+                {versions.length > 0 && (
+                    <Group mt="md" justify="center">
+                        <Text fw={500}>Select Version:</Text>
+                        <Select
+                            value={selectedVersion?.toString() || ''}
+                            onChange={(value) => {
+                                if (value) {
+                                    const newVersion = parseInt(value);
+                                    setSelectedVersion(newVersion);
+                                    router.replace(`/dashboard/datasets/cluster?id=${datasetId}&version=${newVersion}`);
+                                } else {
+                                    setSelectedVersion(null);
+                                    router.replace(`/dashboard/datasets/cluster?id=${datasetId}`);
+                                }
+                            }}
+                            data={versions.map(version => ({
+                                value: version.toString(),
+                                label: `Version ${version}`
+                            }))}
+                            placeholder="Select version"
+                            style={{ width: '200px' }}
+                        />
+                    </Group>
+                )}
             </Container>
         );
     }
@@ -364,35 +406,47 @@ export default function ClusterView() {
         <Container size="xl" py="xl">
             <div className={classes.root}>
                 {versions.length > 0 && (
-                    <Group mb="md" justify="space-between">
-                        <Text fw={500}>Clustering Version:</Text>
-                        <Select
-                            value={selectedVersion?.toString() || ''}
-                            onChange={(value) => {
-                                if (value) {
-                                    setSelectedVersion(parseInt(value));
-                                    router.push(`/dashboard/datasets/cluster?id=${datasetId}&version=${value}`);
-                                }
-                            }}
-                            data={versions.map(v => ({ value: v.version.toString(), label: `Version ${v.version} (${new Date(v.created_at).toLocaleString()})` }))}
-                            style={{ width: '300px' }}
-                        />
+                    <Group mb="xl" justify="space-between" align="center">
+                        <Title order={2}>Dataset Clusters</Title>
+                        <Group>
+                            <Text fw={500}>Clustering Version:</Text>
+                            <Select
+                                value={selectedVersion?.toString() || ''}
+                                onChange={(value) => {
+                                    if (value) {
+                                        const newVersion = parseInt(value);
+                                        setSelectedVersion(newVersion);
+                                        router.replace(`/dashboard/datasets/cluster?id=${datasetId}&version=${newVersion}`);
+                                    } else {
+                                        setSelectedVersion(null);
+                                        router.replace(`/dashboard/datasets/cluster?id=${datasetId}`);
+                                    }
+                                }}
+                                data={versions.map(version => ({
+                                    value: version.toString(),
+                                    label: `Version ${version}`
+                                }))}
+                                placeholder="Select version"
+                                style={{ width: '200px' }}
+                            />
+                        </Group>
                     </Group>
                 )}
 
-                {categories.length === 0 ? (
+                {loading && <Loader style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }} />}
+
+                {!loading && (!datasetDetails || !datasetDetails.categories || datasetDetails.categories.length === 0) && (
                     <Alert color="blue" title="No Clusters Found">
-                        There are no clusters available for this dataset. This could mean either:
-                        <ul style={{ marginTop: '10px' }}>
-                            <li>The clustering process has not been started yet</li>
-                            <li>The clustering process is still in progress</li>
-                            <li>No clusters were found in the dataset</li>
-                        </ul>
+                        No cluster data available for Version {selectedVersion}. This could be due to an incomplete clustering process or no clusters being generated.
                     </Alert>
-                ) : (
-                    categories.map((category) => {
-                        const pagedSubclusters = getPagedSubclusters(category.subclusters, category.id);
-                        const totalPages = Math.ceil(category.subclusters.length / ITEMS_PER_PAGE);
+                )}
+
+                {datasetDetails && datasetDetails.categories && datasetDetails.categories.length > 0 && (
+                    datasetDetails.categories.map((category) => {
+                        const categoryPercentage = calculatePercentage(
+                            category.category_text_count,
+                            datasetDetails.dataset_total_texts
+                        );
 
                         return (
                             <Card withBorder shadow="sm" radius="md" key={category.id} mb="lg" className={classes.categoryCard}>
@@ -403,21 +457,25 @@ export default function ClusterView() {
                                                 {category.name || `Category ${category.id}`}
                                             </Title>
                                             <Text className={classes.categoryStats}>
-                                                {category.subclusters.length} subclusters
+                                                {category.level1_clusters.length} subclusters
                                             </Text>
                                         </div>
                                         <div>
                                             <Text size="lg" fw={700} className={classes.value}>
-                                                {category.total_rows.toLocaleString()}
+                                                {category.category_text_count.toLocaleString()}
                                             </Text>
                                             <Text className={classes.categoryStats}>
-                                                {category.percentage.toFixed(2)}% of total rows
+                                                {categoryPercentage.toFixed(2)}% of total rows
                                             </Text>
                                         </div>
                                     </div>
 
                                     <div className={classes.subclusterContainer}>
-                                        {renderSubclusters(category.subclusters, category.id)}
+                                        {renderLevel1Clusters(
+                                            category.level1_clusters,
+                                            category.id,
+                                            category.category_text_count
+                                        )}
                                     </div>
                                 </Group>
                             </Card>

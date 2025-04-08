@@ -1,42 +1,43 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Query
-from sqlalchemy.orm import Session
-from typing import List, Dict, Optional
+from sqlalchemy.orm import Session, joinedload
+from typing import List, Dict, Optional, Any, Tuple
 import logging
 import os
 import pandas as pd
 import requests
 import json
 from models import (
+    Base,
     DatasetRequest,
     DatasetMetadataResponse,
     DatasetMetadata,
-    DownloadStatus,
-    Category,
-    Subcluster,
-    TextCluster,
     TextDB,
-    CategoryResponse,
-    SubclusterResponse,
+    Category,
+    Level1Cluster,
+    TextAssignment,
     ClusteringHistory,
-    DatasetResponse,
+    DatasetDetailResponse,
+    CategoryResponse,
+    Level1ClusterResponse,
+    TextDBResponse,
+    DownloadStatus,
+    DownloadStatusUpdate,
+    DownloadStatusEnum,
+    ClusteringStatus,
 )
 from utils.database import (
     get_db,
+    SessionLocal,
     download_and_save_dataset,
-    get_active_downloads,
     verify_and_update_dataset_status,
+    save_clustering_results,
+    scan_existing_datasets,
     get_duckdb_connection,
 )
-from openai import OpenAI
-
-
-from utils.clustering import cluster_texts as clustering_utils_cluster_texts
+from utils.clustering import cluster_texts
+from sqlalchemy import func, desc
 from datetime import datetime
-import duckdb
-import numpy as np
-from sklearn.cluster import AgglomerativeClustering
-from utils.scan_datasets import scan_datasets_folder
-from sqlalchemy import func
+from openai import OpenAI
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -46,8 +47,8 @@ BATCH_SIZE = 100  # Number of texts to process at once for embeddings
 DISTANCE_THRESHOLD = 0.5  # Clustering distance threshold
 
 # Model configurations
-OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
-OPENROUTER_LLM_MODEL = "anthropic/claude-3-sonnet"
+OPENAI_EMBEDDING_MODEL = "text-embedding-3-large"
+OPENROUTER_LLM_MODEL = "anthropic/claude-3.7-sonnet"
 
 
 async def get_embeddings(texts: List[str]) -> List[List[float]]:
@@ -100,40 +101,12 @@ async def generate_category_name(texts: List[str]) -> str:
     return response.choices[0].message.content.strip()
 
 
+# Comment out the unused generate_subcluster_name function
+"""
 async def generate_subcluster_name(texts: List[str]) -> str:
-    """Generate a subcluster name for a group of texts using OpenRouter API."""
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    if not api_key:
-        raise Exception("OPENROUTER_API_KEY environment variable is not set")
-
-    client = OpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=api_key,
-    )
-
-    prompt = (
-        "Create a specific and descriptive title (3-5 words) for the following group of texts. "
-        "The title should be clear and focused on the shared theme.\n\n"
-        "Texts:\n" + "\n".join(texts)  # Removed limit
-    )
-
-    response = client.chat.completions.create(
-        model=OPENROUTER_LLM_MODEL,
-        messages=[
-            {
-                "role": "system",
-                "content": "You are an expert in creating specific, descriptive titles.",
-            },
-            {"role": "user", "content": prompt},
-        ],
-        max_tokens=50,
-        temperature=0.3,
-        extra_headers={
-            "HTTP-Referer": "https://github.com/ivory",
-            "X-Title": "Ivory",
-        },
-    )
-    return response.choices[0].message.content.strip()
+    # DEPRECATED: This function is no longer used with the new clustering approach
+    pass
+"""
 
 
 @router.post("/download")
@@ -188,16 +161,39 @@ async def download_dataset(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/", response_model=List[DatasetResponse])
-async def list_datasets(db: Session = Depends(get_db)):
-    """List all available datasets."""
+@router.get("", response_model=List[DatasetMetadataResponse])
+async def list_datasets_endpoint(
+    skip: int = 0, limit: int = 100, db: Session = Depends(get_db)
+):
+    """List available datasets with their status."""
     try:
         # First scan for any new datasets
-        scan_datasets_folder()
+        scan_existing_datasets(db)
 
-        # Then fetch all datasets from the database
-        datasets = db.query(DatasetMetadata).all()
-        return [DatasetResponse.model_validate(dataset) for dataset in datasets]
+        # Then get the datasets with pagination
+        datasets = (
+            db.query(DatasetMetadata)
+            .order_by(DatasetMetadata.created_at.desc())
+            .offset(skip)
+            .limit(limit)
+            .all()
+        )
+        response_data = []
+        for dataset in datasets:
+            # Find the latest successful version for each dataset
+            latest_history = (
+                db.query(ClusteringHistory.clustering_version)
+                .filter(ClusteringHistory.dataset_id == dataset.id)
+                .filter(ClusteringHistory.clustering_status == "completed")
+                .order_by(ClusteringHistory.clustering_version.desc())
+                .first()
+            )
+            latest_version = latest_history[0] if latest_history else None
+            # Use model_validate instead of from_orm
+            response_item = DatasetMetadataResponse.model_validate(dataset)
+            response_item.latest_version = latest_version
+            response_data.append(response_item)
+        return response_data
     except Exception as e:
         logger.exception(f"Error listing datasets: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -229,19 +225,25 @@ async def get_dataset_info(
             raise HTTPException(status_code=404, detail="Dataset not found")
 
         if detail_level == "data":
-            if dataset_metadata.status != DownloadStatus.COMPLETED:
+            # Use the Enum value for comparison
+            if dataset_metadata.status != DownloadStatusEnum.COMPLETED.value:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Dataset is not ready. Current status: {dataset_metadata.status.value}",
+                    detail=f"Dataset is not ready. Current status: {dataset_metadata.status}",  # Use the stored status directly
                 )
 
+            # Construct base path using only the dataset name
             dataset_path = os.path.join(
                 "datasets", dataset_metadata.name.replace("/", "_")
             )
-            if dataset_metadata.subset:
-                dataset_path = os.path.join(dataset_path, dataset_metadata.subset)
+            # Removed subset logic
 
-            # Find splits
+            # Find splits by listing directories in the dataset path
+            if not os.path.exists(dataset_path):
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Dataset directory not found: {dataset_path}",
+                )
             available_splits = [
                 d
                 for d in os.listdir(dataset_path)
@@ -249,15 +251,12 @@ async def get_dataset_info(
             ]
             if not available_splits:
                 raise HTTPException(
-                    status_code=404, detail="No splits found for this dataset"
+                    status_code=404,
+                    detail=f"No splits found in dataset directory: {dataset_path}",
                 )
 
-            # Use the first split if none specified
-            split = (
-                dataset_metadata.split
-                if dataset_metadata.split
-                else available_splits[0]
-            )
+            # Use the first available split
+            split = available_splits[0]
             split_path = os.path.join(dataset_path, split)
 
             # Find parquet files
@@ -301,8 +300,7 @@ async def get_dataset_info(
             dataset_path = os.path.join(
                 "datasets", dataset_metadata.name.replace("/", "_")
             )
-            if dataset_metadata.subset:
-                dataset_path = os.path.join(dataset_path, dataset_metadata.subset)
+            # Removed subset logic
 
             if not os.path.exists(dataset_path):
                 raise HTTPException(
@@ -361,8 +359,8 @@ async def get_dataset_info(
             return {
                 "id": dataset_metadata.id,
                 "name": dataset_metadata.name,
-                "subset": dataset_metadata.subset,
-                "status": dataset_metadata.status.value,
+                # "subset": dataset_metadata.subset, # Removed
+                "status": dataset_metadata.status,
                 "splits": rows_info,
             }
         else:
@@ -370,9 +368,10 @@ async def get_dataset_info(
             return {
                 "id": dataset_metadata.id,
                 "name": dataset_metadata.name,
-                "subset": dataset_metadata.subset,
-                "status": dataset_metadata.status.value,
-                "download_date": dataset_metadata.download_date,
+                # "subset": dataset_metadata.subset, # Removed
+                "status": dataset_metadata.status,
+                # "download_date": dataset_metadata.download_date, # download_date removed from model
+                "created_at": dataset_metadata.created_at,  # Use created_at instead
             }
 
     except Exception as e:
@@ -395,8 +394,9 @@ async def verify_dataset(dataset_id: int, db: Session = Depends(get_db)):
 
 @router.post("/update_status")
 async def update_download_status(
-    dataset_id: int, status: DownloadStatus, db: Session = Depends(get_db)
+    dataset_id: int, status_update: DownloadStatusUpdate, db: Session = Depends(get_db)
 ):
+    """Update the download status of a dataset."""
     # Find the dataset record
     dataset_metadata = (
         db.query(DatasetMetadata).filter(DatasetMetadata.id == dataset_id).first()
@@ -404,8 +404,8 @@ async def update_download_status(
     if not dataset_metadata:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    # Update the status
-    dataset_metadata.status = status
+    # Update the status using the enum value
+    dataset_metadata.status = status_update.status
     db.commit()
 
     return {"message": "Status updated successfully"}
@@ -438,7 +438,7 @@ async def get_dataset_status(
             return {
                 "id": dataset_metadata.id,
                 "dataset": dataset_metadata.name,
-                "status": dataset_metadata.status.value,
+                "status": dataset_metadata.status,
                 "download_date": dataset_metadata.download_date,
             }
     except Exception as e:
@@ -446,401 +446,388 @@ async def get_dataset_status(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Comment out the old process_clustering endpoint
+"""
 @router.post("/{dataset_id}/cluster")
 async def process_clustering(dataset_id: int, db: Session = Depends(get_db)):
-    """Process clustering for a dataset."""
-    try:
-        # Get the latest version number for this dataset
-        latest_version = (
-            db.query(func.max(ClusteringHistory.clustering_version))
-            .filter(ClusteringHistory.dataset_id == dataset_id)
-            .scalar()
-            or 0
-        )
-        new_version = latest_version + 1
-
-        # Create clustering history entry
-        history = ClusteringHistory(
-            dataset_id=dataset_id,
-            clustering_status="in_progress",
-            titling_status="not_started",
-            created_at=datetime.utcnow(),
-            clustering_version=new_version,
-        )
-        db.add(history)
-        db.commit()
-
-        # Get dataset
-        dataset = (
-            db.query(DatasetMetadata).filter(DatasetMetadata.id == dataset_id).first()
-        )
-        if not dataset:
-            raise HTTPException(status_code=404, detail="Dataset not found")
-
-        # Update dataset status
-        dataset.clustering_status = "in_progress"
-        db.commit()
-
-        try:
-            # Get texts from the dataset
-            with get_duckdb_connection() as conn:
-                result = conn.execute(
-                    """
-                    SELECT text
-                    FROM texts
-                    WHERE dataset_id = ?
-                    """,
-                    [dataset_id],
-                ).fetchall()
-                texts = [row[0] for row in result]
-
-            if not texts:
-                raise HTTPException(status_code=400, detail="No texts found in dataset")
-
-            # Perform clustering
-            categories, subclusters = await clustering_utils_cluster_texts(
-                texts, db, dataset_id, new_version
-            )
-
-            # Update history
-            history.clustering_status = "completed"
-            history.titling_status = "completed"
-            history.completed_at = datetime.utcnow()
-            db.commit()
-
-            # Update dataset status
-            dataset.clustering_status = "completed"
-            dataset.is_clustered = True
-            db.commit()
-
-            return {
-                "message": "Clustering completed successfully",
-                "categories": len(categories),
-                "subclusters": len(subclusters),
-                "version": new_version,
-            }
-
-        except Exception as e:
-            # Update history with error
-            history.clustering_status = "failed"
-            history.titling_status = "failed"
-            history.error_message = str(e)
-            history.completed_at = datetime.utcnow()
-            db.commit()
-
-            # Update dataset status
-            dataset.clustering_status = "failed"
-            db.commit()
-
-            logger.error(f"Error during clustering: {str(e)}")
-            raise HTTPException(status_code=500, detail=str(e))
-
-    except Exception as e:
-        logger.error(f"Error during clustering: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+    # DEPRECATED: Use trigger_clustering_endpoint instead
+    # This endpoint uses the old clustering approach with Subcluster model
+    # which has been replaced with Level1Cluster
+    pass
+"""
 
 
+# Comment out the old clustering_status endpoint
+"""
 @router.get("/{dataset_id}/clustering_status")
 async def get_clustering_status(dataset_id: int, db: Session = Depends(get_db)):
-    """Get the current clustering status for a dataset."""
-    dataset_metadata = (
-        db.query(DatasetMetadata).filter(DatasetMetadata.id == dataset_id).first()
-    )
-    if not dataset_metadata:
-        raise HTTPException(status_code=404, detail="Dataset not found")
-
-    if dataset_metadata.clustering_status == "failed":
-        raise HTTPException(
-            status_code=500,
-            detail="Clustering failed. Please try again.",
-        )
-
-    return {"status": dataset_metadata.clustering_status}
+    # DEPRECATED: Use get_dataset_status with status_type=clustering instead
+    pass
+"""
 
 
+# Comment out the old get_clusters endpoint
+"""
 @router.get("/{dataset_id}/clusters")
 async def get_clusters(
     dataset_id: int, version: Optional[int] = None, db: Session = Depends(get_db)
 ):
-    """Get clusters for a dataset."""
+    # DEPRECATED: Use get_dataset_details_endpoint instead 
+    # This endpoint uses the old clustering approach with Subcluster model
+    # which has been replaced with Level1Cluster
+    pass
+"""
+
+
+@router.get("/clustering/history", response_model=List[Dict])
+async def get_clustering_history(
+    dataset_id: Optional[int] = None,
+    clustering_version: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    """Get clustering history, optionally filtered by dataset ID and version."""
     try:
-        # If version is not specified, get the latest version
-        if version is None:
-            latest_version = (
-                db.query(func.max(ClusteringHistory.clustering_version))
-                .filter(
-                    ClusteringHistory.dataset_id == dataset_id,
-                    ClusteringHistory.clustering_status == "completed",
-                )
-                .scalar()
-            )
-
-            if latest_version is None:
-                return {"status": "not_started", "categories": []}
-
-            version = latest_version
-
-        # Check if clustering is in progress
-        history = (
-            db.query(ClusteringHistory)
-            .filter(
-                ClusteringHistory.dataset_id == dataset_id,
-                ClusteringHistory.clustering_version == version,
-            )
-            .first()
+        # Join with DatasetMetadata to get the name
+        query = (
+            db.query(ClusteringHistory, DatasetMetadata.name)
+            .join(DatasetMetadata, ClusteringHistory.dataset_id == DatasetMetadata.id)
+            .order_by(ClusteringHistory.created_at.desc())
         )
-
-        if not history:
-            return {"status": "not_started", "categories": []}
-
-        if history.clustering_status == "in_progress":
-            return {"status": "in_progress", "categories": []}
-
-        if history.clustering_status == "failed":
-            # Return a proper error response with 500 status code
-            error_message = (
-                history.error_message or "Clustering failed for this version"
-            )
-            raise HTTPException(
-                status_code=500,
-                detail=f"Clustering failed for version {version}: {error_message}",
+        if dataset_id is not None:
+            query = query.filter(ClusteringHistory.dataset_id == dataset_id)
+        if clustering_version is not None:
+            query = query.filter(
+                ClusteringHistory.clustering_version == clustering_version
             )
 
-        # Get categories and subclusters for this version
-        categories = (
-            db.query(Category)
-            .filter(Category.dataset_id == dataset_id, Category.version == version)
-            .all()
-        )
-
-        if not categories:
-            # Check if there are any categories for this dataset at all
-            any_categories = (
-                db.query(Category).filter(Category.dataset_id == dataset_id).first()
-            )
-
-            if any_categories:
-                # There are categories for this dataset, but not for this version
-                available_versions = (
-                    db.query(Category.version)
-                    .filter(Category.dataset_id == dataset_id)
-                    .distinct()
-                    .all()
-                )
-                available_versions = [v[0] for v in available_versions]
-                return {
-                    "status": "completed",
-                    "categories": [],
-                    "message": f"No categories found for version {version}. Available versions: {available_versions}",
-                }
-            else:
-                # No categories at all for this dataset
-                return {
-                    "status": "completed",
-                    "categories": [],
-                    "message": "No categories found for this dataset. Try running clustering first.",
-                }
-
-        # Get subclusters for each category
-        result = []
-        for category in categories:
-            subclusters = (
-                db.query(Subcluster)
-                .filter(
-                    Subcluster.category_id == category.id, Subcluster.version == version
-                )
-                .all()
-            )
-
-            # Get texts for each subcluster
-            subcluster_data = []
-            for subcluster in subclusters:
-                texts = (
-                    db.query(TextDB)
-                    .join(TextCluster, TextDB.id == TextCluster.text_id)
-                    .filter(TextCluster.subcluster_id == subcluster.id)
-                    .all()
-                )
-
-                subcluster_data.append(
-                    {
-                        "id": subcluster.id,
-                        "title": subcluster.title,
-                        "row_count": subcluster.row_count,
-                        "percentage": subcluster.percentage,
-                        "texts": [{"id": text.id, "text": text.text} for text in texts],
-                    }
-                )
-
-            result.append(
-                {
-                    "id": category.id,
-                    "name": category.name,
-                    "total_rows": category.total_rows,
-                    "percentage": category.percentage,
-                    "subclusters": subcluster_data,
-                }
-            )
-
-        return {"status": "completed", "categories": result, "version": version}
-
+        history_results = query.all()
+        # Construct the response including dataset_name and version
+        return [
+            {
+                "id": h.id,
+                "dataset_id": h.dataset_id,
+                "dataset_name": dataset_name,  # Include dataset name
+                "version": h.clustering_version,  # Include version
+                "clustering_status": h.clustering_status,
+                # titling_status removed as it's not in the model
+                "created_at": h.created_at.isoformat() if h.created_at else None,
+                "completed_at": h.completed_at.isoformat() if h.completed_at else None,
+                "error_message": h.error_message,
+                "details": h.details,
+            }
+            for h, dataset_name in history_results  # Unpack results
+        ]
     except Exception as e:
-        logger.exception(f"Error getting clusters: {str(e)}")
+        logger.error(f"Error getting clustering history: {e}", exc_info=True)
         raise HTTPException(
-            status_code=500, detail=f"Error retrieving clusters: {str(e)}"
+            status_code=500, detail=f"Error getting clustering history: {e}"
         )
 
 
-@router.get("/clustering/history")
-async def get_clustering_history(db: Session = Depends(get_db)):
-    """Get the clustering history for all datasets."""
-    try:
-        # Check if clustering_version column exists
-        try:
-            # Try to query with clustering_version
-            history = (
-                db.query(ClusteringHistory)
-                .order_by(ClusteringHistory.created_at.desc())
-                .all()
-            )
-
-            return [
-                {
-                    "id": entry.id,
-                    "dataset_id": entry.dataset_id,
-                    "dataset_name": entry.dataset.name if entry.dataset else "Unknown",
-                    "clustering_status": entry.clustering_status,
-                    "titling_status": entry.titling_status,
-                    "created_at": entry.created_at.isoformat(),
-                    "completed_at": (
-                        entry.completed_at.isoformat() if entry.completed_at else None
-                    ),
-                    "error_message": entry.error_message,
-                    "clustering_version": entry.clustering_version,
-                }
-                for entry in history
-            ]
-        except Exception as e:
-            # If there's an error, it might be because the column doesn't exist
-            logger.warning(f"Error querying with clustering_version: {str(e)}")
-
-            # Fallback to query without clustering_version
-            history = (
-                db.query(ClusteringHistory)
-                .order_by(ClusteringHistory.created_at.desc())
-                .all()
-            )
-
-            return [
-                {
-                    "id": entry.id,
-                    "dataset_id": entry.dataset_id,
-                    "dataset_name": entry.dataset.name if entry.dataset else "Unknown",
-                    "clustering_status": entry.clustering_status,
-                    "titling_status": entry.titling_status,
-                    "created_at": entry.created_at.isoformat(),
-                    "completed_at": (
-                        entry.completed_at.isoformat() if entry.completed_at else None
-                    ),
-                    "error_message": entry.error_message,
-                    "clustering_version": 1,  # Default to version 1 for backward compatibility
-                }
-                for entry in history
-            ]
-    except Exception as e:
-        logger.error(f"Error getting clustering history: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
+# Comment out the old get_subcluster_texts endpoint
+"""
 @router.get("/subclusters/{subcluster_id}/texts")
 async def get_subcluster_texts(subcluster_id: int, db: Session = Depends(get_db)):
-    """Get all texts for a specific subcluster."""
+    # DEPRECATED: Use level1_clusters/{level1_cluster_id}/texts instead
+    # This endpoint uses the old clustering approach with Subcluster model
+    # which has been replaced with Level1Cluster
+    pass
+"""
+
+
+@router.get("/{dataset_id}/clustering/versions", response_model=List[int])
+async def get_clustering_versions(dataset_id: int, db: Session = Depends(get_db)):
+    """Get available clustering versions for a dataset."""
     try:
-        with get_duckdb_connection() as duckdb_conn:
-            # Get texts for this subcluster
-            texts_result = duckdb_conn.execute(
-                """
-                SELECT tc.text_id, t.text, tc.membership_score
-                FROM text_clusters tc
-                JOIN texts t ON tc.text_id = t.id
-                WHERE tc.subcluster_id = ?
-                ORDER BY tc.membership_score DESC
-                """,
-                [subcluster_id],
-            ).fetchall()
-
-            texts = [
-                {
-                    "text_id": text_id,
-                    "text": text,
-                    "membership_score": score,
-                }
-                for text_id, text, score in texts_result
-            ]
-
-            return {"texts": texts}
-
+        versions = (
+            db.query(ClusteringHistory.clustering_version)
+            .filter(ClusteringHistory.dataset_id == dataset_id)
+            .filter(ClusteringHistory.clustering_status == "completed")
+            .order_by(ClusteringHistory.clustering_version.desc())
+            .all()
+        )
+        return [v[0] for v in versions]
     except Exception as e:
-        logger.exception(f"Error getting subcluster texts: {str(e)}")
+        logger.error(f"Error getting clustering versions: {e}", exc_info=True)
         raise HTTPException(
-            status_code=500, detail=f"Error retrieving subcluster texts: {str(e)}"
+            status_code=500, detail=f"Error getting clustering versions: {e}"
         )
 
 
-@router.get("/{dataset_id}/clustering/versions")
-async def get_clustering_versions(dataset_id: int, db: Session = Depends(get_db)):
-    """Get all clustering versions for a dataset."""
+@router.post("", response_model=DatasetMetadataResponse)
+async def create_dataset_endpoint(
+    request: DatasetRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    # ... (Existing dataset creation/download endpoint logic - needs review)
+    # Make sure download_and_save_dataset is called correctly if using it
+    logger.warning("Dataset creation endpoint might need updates for text insertion.")
+    # Example call (assuming download_and_save_dataset is adapted)
+    # download_and_save_dataset(db, request)
+    # Find the created dataset metadata to return
+    # metadata = db.query(DatasetMetadata).filter(DatasetMetadata.name == request.name).first()
+    # if not metadata: raise HTTPException(404)
+    # return metadata
+    raise NotImplementedError("Dataset creation endpoint needs review/implementation.")
+
+
+@router.post("/{dataset_id}/cluster", status_code=202)
+async def trigger_clustering_endpoint(
+    dataset_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)
+):
+    """Triggers the scalable clustering process in the background."""
+    # 1. Find dataset
+    dataset = db.query(DatasetMetadata).filter(DatasetMetadata.id == dataset_id).first()
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    if dataset.clustering_status == "processing":
+        raise HTTPException(
+            status_code=409,
+            detail="Clustering is already in progress for this dataset.",
+        )
+
+    # 2. Determine the next version
+    latest_version_result = (
+        db.query(func.max(ClusteringHistory.clustering_version))
+        .filter(ClusteringHistory.dataset_id == dataset_id)
+        .scalar()
+    )
+    next_version = (latest_version_result or 0) + 1
+    logger.info(f"Dataset {dataset_id}: Triggering clustering version {next_version}.")
+
+    # 3. Fetch texts and create ID map
+    logger.info(f"Dataset {dataset_id}: Fetching texts for clustering...")
+    texts_with_ids = (
+        db.query(TextDB.id, TextDB.text).filter(TextDB.dataset_id == dataset_id).all()
+    )
+
+    if not texts_with_ids:
+        raise HTTPException(
+            status_code=400, detail="Dataset contains no texts to cluster."
+        )
+
+    logger.info(f"Dataset {dataset_id}: Found {len(texts_with_ids)} texts.")
+
+    # 4. Add the background task
+    # Need to pass a *new* db session to the background task
+    background_tasks.add_task(
+        run_clustering_task,
+        dataset_id=dataset_id,
+        version=next_version,
+        texts_with_ids=texts_with_ids,  # Pass texts and IDs
+        db=SessionLocal(),  # Create a new session for the task
+    )
+
+    # 5. Update status immediately and return
+    dataset.clustering_status = "processing"  # Mark as processing immediately
+    db.commit()
+
+    return {
+        "message": f"Clustering version {next_version} started for dataset {dataset_id}"
+    }
+
+
+@router.get("/{dataset_id}/details")
+async def get_dataset_details_endpoint(
+    dataset_id: int, version: Optional[int] = None, db: Session = Depends(get_db)
+):
+    """Get dataset details, optionally including clustering results for a specific version."""
+    dataset = db.query(DatasetMetadata).filter(DatasetMetadata.id == dataset_id).first()
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    # Find the latest successful version if none specified
+    target_version = version
+    if target_version is None:
+        latest_history = (
+            db.query(ClusteringHistory.clustering_version)
+            .filter(ClusteringHistory.dataset_id == dataset.id)
+            .filter(ClusteringHistory.clustering_status == "completed")
+            .order_by(ClusteringHistory.clustering_version.desc())
+            .first()
+        )
+        target_version = latest_history[0] if latest_history else None
+
+    # Use model_validate instead of from_orm
+    response_data = DatasetDetailResponse.model_validate(dataset)
+    response_data.latest_version = (
+        target_version  # Show which version we're potentially loading
+    )
+    response_data.categories = []  # Initialize categories list
+
+    # Only attempt to load categories if we have a valid version
+    if target_version is not None:
+        logger.info(
+            f"Loading clustering results for dataset {dataset_id}, version {target_version}"
+        )
+
+        # Calculate total texts for this specific dataset version
+        # This requires querying TextAssignment based on Level1Cluster -> Category -> dataset_id and version
+        total_texts_in_version = (
+            db.query(func.count(TextAssignment.id))
+            .join(Level1Cluster, TextAssignment.level1_cluster_id == Level1Cluster.id)
+            .join(Category, Level1Cluster.category_id == Category.id)
+            .filter(Category.dataset_id == dataset_id)
+            .filter(Category.version == target_version)
+            .scalar()
+        ) or 0
+        response_data.dataset_total_texts = total_texts_in_version
+        logger.info(
+            f"Total texts found for dataset {dataset_id} version {target_version}: {total_texts_in_version}"
+        )
+
+        # Query categories with eager loading
+        categories = (
+            db.query(Category)
+            .options(
+                joinedload(Category.level1_clusters).joinedload(
+                    Level1Cluster.text_assignments
+                )
+                # .joinedload(TextAssignment.text) # Maybe remove text loading here if not needed directly
+            )
+            .filter(Category.dataset_id == dataset_id)
+            .filter(Category.version == target_version)
+            .order_by(Category.name)
+            .all()
+        )
+        logger.info(
+            f"Found {len(categories)} categories for dataset {dataset_id}, version {target_version}"
+        )
+
+        # Process each category
+        for cat in categories:
+            # Calculate total texts in this category
+            total_texts_in_category = sum(
+                len(l1.text_assignments) for l1 in cat.level1_clusters
+            )
+
+            # Create category response object
+            cat_resp = CategoryResponse.model_validate(cat)
+            cat_resp.category_text_count = (
+                total_texts_in_category  # Assign category text count
+            )
+            cat_resp.level1_clusters = []
+
+            # Process each level1_cluster in this category
+            for l1 in sorted(cat.level1_clusters, key=lambda x: x.title):
+                # Create level1_cluster response object
+                l1_resp = Level1ClusterResponse.model_validate(l1)
+                l1_resp.text_count = len(l1.text_assignments)
+
+                # Add all texts from text_assignments (or keep limit if preferred)
+                l1_resp.texts = [
+                    TextDBResponse.model_validate(assign.text)
+                    for assign in l1.text_assignments  # Removed [:50] limit as requested
+                ]
+
+                cat_resp.level1_clusters.append(l1_resp)
+
+            response_data.categories.append(cat_resp)
+
+    else:
+        logger.info(
+            f"No specific or latest completed version found for dataset {dataset_id}"
+        )
+        response_data.dataset_total_texts = 0  # Set total to 0 if no version
+
+    logger.info(f"Response data before serialization: {response_data}")
+    return response_data.model_dump()
+
+
+# --- Helper Function for Background Task ---
+
+
+async def run_clustering_task(
+    dataset_id: int, version: int, texts_with_ids: List[Tuple[int, str]], db: Session
+):
+    """The actual clustering logic run in the background."""
+    history_entry = None
+    start_time = datetime.utcnow()
     try:
-        # Check if clustering_version column exists
-        try:
-            # Try to query with clustering_version
-            versions = (
-                db.query(ClusteringHistory)
-                .filter(ClusteringHistory.dataset_id == dataset_id)
-                .order_by(ClusteringHistory.created_at.desc())
-                .all()
-            )
+        # 1. Create initial history entry
+        history_entry = ClusteringHistory(
+            dataset_id=dataset_id,
+            clustering_version=version,
+            clustering_status="started",
+            created_at=start_time,
+        )
+        db.add(history_entry)
+        db.commit()
+        db.refresh(history_entry)
+        logger.info(f"Dataset {dataset_id} v{version}: Clustering task started.")
 
-            return [
-                {
-                    "id": version.id,
-                    "version": version.clustering_version,
-                    "status": version.clustering_status,
-                    "created_at": version.created_at.isoformat(),
-                    "completed_at": (
-                        version.completed_at.isoformat()
-                        if version.completed_at
-                        else None
-                    ),
-                }
-                for version in versions
-            ]
-        except Exception as e:
-            # If there's an error, it might be because the column doesn't exist
-            logger.warning(f"Error querying with clustering_version: {str(e)}")
+        # Update main metadata status
+        db.query(DatasetMetadata).filter(DatasetMetadata.id == dataset_id).update(
+            {
+                "clustering_status": "processing",
+                "is_clustered": False,  # Ensure false until completion
+            }
+        )
+        db.commit()
 
-            # Fallback to query without clustering_version
-            versions = (
-                db.query(ClusteringHistory)
-                .filter(ClusteringHistory.dataset_id == dataset_id)
-                .order_by(ClusteringHistory.created_at.desc())
-                .all()
-            )
+        # Extract texts and create the content->ID map
+        original_texts = [text for _, text in texts_with_ids]
+        text_content_to_db_id_map = {text: id for id, text in texts_with_ids}
 
-            return [
-                {
-                    "id": version.id,
-                    "version": 1,  # Default to version 1 for backward compatibility
-                    "status": version.clustering_status,
-                    "created_at": version.created_at.isoformat(),
-                    "completed_at": (
-                        version.completed_at.isoformat()
-                        if version.completed_at
-                        else None
-                    ),
-                }
-                for version in versions
-            ]
+        # Update history status
+        history_entry.clustering_status = (
+            "clustering_l1"  # Or more granular if possible
+        )
+        db.commit()
+
+        # 2. Call the scalable clustering function
+        # cluster_texts now returns a tuple (final_categories, final_subclusters)
+        # It no longer returns a dict with 'assignments' or 'category_names'
+        clustering_results_tuple = await cluster_texts(
+            texts=original_texts, db=db, dataset_id=dataset_id, version=version
+        )
+
+        # Check if the function indicated failure (e.g., by returning None or raising an exception handled above)
+        # We rely on the exception handling within cluster_texts or the outer try/except here.
+        # If it returns normally, we assume it saved results correctly.
+        logger.info(
+            f"Dataset {dataset_id} v{version}: cluster_texts function completed."
+        )
+
+        # Update history status (assuming saving is done within cluster_texts or save_clustering_results)
+        history_entry.clustering_status = (
+            "saving"  # Or potentially completed if saving is synchronous
+        )
+        db.commit()
+
+        # 5. Update final status on success
+        end_time = datetime.utcnow()
+        duration = (end_time - start_time).total_seconds()
+        history_entry.clustering_status = "completed"
+        history_entry.completed_at = end_time
+        db.query(DatasetMetadata).filter(DatasetMetadata.id == dataset_id).update(
+            {"clustering_status": "completed", "is_clustered": True}
+        )
+        db.commit()
+        logger.info(
+            f"Dataset {dataset_id} v{version}: Clustering completed successfully in {duration:.2f}s."
+        )
+
     except Exception as e:
-        logger.error(f"Error getting clustering versions: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(
+            f"Error during clustering task for dataset {dataset_id} v{version}: {e}",
+            exc_info=True,
+        )
+        # Update status to failed
+        # Check if history_entry was successfully created before accessing
+        if history_entry:
+            history_entry.clustering_status = "failed"
+            history_entry.error_message = str(e)[:1000]  # Truncate error
+            history_entry.completed_at = datetime.utcnow()
+            # No need to commit here, will be committed with DatasetMetadata update
+
+        # Update DatasetMetadata status
+        db.query(DatasetMetadata).filter(DatasetMetadata.id == dataset_id).update(
+            {"clustering_status": "failed", "is_clustered": False}
+        )
+        db.commit()  # Commit final failure status for both history and metadata
+
+    finally:
+        db.close()  # Ensure session is closed in background task

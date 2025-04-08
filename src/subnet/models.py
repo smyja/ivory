@@ -1,124 +1,36 @@
-from pydantic import BaseModel, ConfigDict
-from typing import List, Optional
+import uuid
 from sqlalchemy import (
+    create_engine,
     Column,
     Integer,
     String,
-    Boolean,
-    Enum as SQLAlchemyEnum,
-    types,
     Float,
-    ForeignKey,
     DateTime,
+    Boolean,
+    ForeignKey,
+    MetaData,
     Sequence,
+    UniqueConstraint,
+    Index,
 )
+from sqlalchemy.orm import relationship, declarative_base
 from sqlalchemy.sql import func
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import relationship
-from enum import Enum
+from pydantic import BaseModel, Field
+from typing import List, Optional, Dict, Any
 from datetime import datetime
+from enum import Enum
 
 Base = declarative_base()
 
-# Define sequences
+# --- Sequences ---
 dataset_id_seq = Sequence("dataset_metadata_id_seq")
-category_id_seq = Sequence("categories_id_seq")
-subcluster_id_seq = Sequence("subclusters_id_seq")
 text_id_seq = Sequence("texts_id_seq")
-clustering_history_id_seq = Sequence("clustering_history_id_seq")
+category_id_seq = Sequence("categories_id_seq")
+l1_cluster_id_seq = Sequence("level1_clusters_id_seq")
+assignment_id_seq = Sequence("text_assignments_id_seq")
+history_id_seq = Sequence("clustering_history_id_seq")  # Keep history seq
 
-
-class DownloadStatus(str, Enum):
-    PENDING = "pending"
-    IN_PROGRESS = "in_progress"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-
-class Text(BaseModel):
-    text: str
-
-
-class TextList(BaseModel):
-    texts: List[Text]
-
-
-class ClusteredText(Text):
-    cluster: int
-    cluster_title: str
-    category: str
-
-
-class DatasetRequest(BaseModel):
-    dataset_name: str
-    split: Optional[str] = "train"
-    num_rows: Optional[int] = None
-    config: Optional[str] = "default"
-    subset: Optional[str] = None
-
-
-class Category(Base):
-    __tablename__ = "categories"
-
-    id = Column(
-        Integer,
-        category_id_seq,
-        server_default=category_id_seq.next_value(),
-        primary_key=True,
-    )
-    dataset_id = Column(Integer, ForeignKey("dataset_metadata.id"), nullable=False)
-    name = Column(String, nullable=False)
-    total_rows = Column(Integer, nullable=False)
-    percentage = Column(Float, nullable=False)
-    version = Column(Integer, nullable=False, default=1)
-
-    # Relationships
-    dataset = relationship("DatasetMetadata", back_populates="categories")
-    subclusters = relationship("Subcluster", back_populates="category")
-
-
-class Subcluster(Base):
-    __tablename__ = "subclusters"
-
-    id = Column(
-        Integer,
-        subcluster_id_seq,
-        server_default=subcluster_id_seq.next_value(),
-        primary_key=True,
-    )
-    category_id = Column(Integer, ForeignKey("categories.id"), nullable=False)
-    title = Column(String, nullable=False)
-    row_count = Column(Integer, nullable=False)
-    percentage = Column(Float, nullable=False)
-    version = Column(Integer, nullable=False, default=1)
-
-    # Relationships
-    category = relationship("Category", back_populates="subclusters")
-    texts = relationship("TextCluster", back_populates="subcluster")
-
-
-class TextDB(Base):
-    __tablename__ = "texts"
-
-    id = Column(
-        Integer, text_id_seq, server_default=text_id_seq.next_value(), primary_key=True
-    )
-    text = Column(String, nullable=False)
-
-    # Relationship to clusters
-    clusters = relationship("TextCluster", back_populates="text")
-
-
-class TextCluster(Base):
-    __tablename__ = "text_clusters"
-
-    text_id = Column(Integer, ForeignKey("texts.id"), primary_key=True)
-    subcluster_id = Column(Integer, ForeignKey("subclusters.id"), primary_key=True)
-    membership_score = Column(Float, nullable=False)
-
-    # Relationships
-    subcluster = relationship("Subcluster", back_populates="texts")
-    text = relationship("TextDB", back_populates="clusters")
+# --- Core Tables ---
 
 
 class DatasetMetadata(Base):
@@ -130,17 +42,230 @@ class DatasetMetadata(Base):
         server_default=dataset_id_seq.next_value(),
         primary_key=True,
     )
-    name = Column(String, index=True)
-    subset = Column(String, nullable=True)
-    split = Column(String, nullable=True)
-    download_date = Column(DateTime, default=datetime.utcnow)
-    is_clustered = Column(Boolean, default=False)
-    status = Column(SQLAlchemyEnum(DownloadStatus), default=DownloadStatus.PENDING)
-    clustering_status = Column(String, nullable=True, default=None)
+    name = Column(String, nullable=False, unique=True)
+    description = Column(String)
+    source = Column(String)  # e.g., 'url', 'upload'
+    identifier = Column(String)  # e.g., URL or original filename
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    status = Column(
+        String, default="pending"
+    )  # pending, downloading, downloaded, failed, verifying, verified
+    verification_status = Column(
+        String, default="pending"
+    )  # pending, checking, valid, invalid
+    clustering_status = Column(
+        String, default="pending"
+    )  # pending, processing, completed, failed
+    is_clustered = Column(
+        Boolean, default=False
+    )  # Flag for successful clustering completion
+    total_rows = Column(Integer)
+    error_message = Column(String)  # For download/verification errors
+    file_path = Column(String)  # Path where the dataset is stored locally
 
-    # Add relationships
+    # Relationships
+    texts = relationship("TextDB", back_populates="dataset")
     categories = relationship("Category", back_populates="dataset")
-    clustering_attempts = relationship("ClusteringHistory", back_populates="dataset")
+    clustering_history = relationship("ClusteringHistory", back_populates="dataset")
+
+
+class TextDB(Base):
+    __tablename__ = "texts"
+
+    id = Column(
+        Integer, text_id_seq, server_default=text_id_seq.next_value(), primary_key=True
+    )
+    dataset_id = Column(
+        Integer, ForeignKey("dataset_metadata.id"), nullable=False, index=True
+    )
+    text = Column(String, nullable=False)
+
+    # Unique constraint per dataset
+    __table_args__ = (
+        UniqueConstraint("dataset_id", "text", name="uq_text_per_dataset"),
+    )
+
+    # Relationships
+    dataset = relationship("DatasetMetadata", back_populates="texts")
+    assignment = relationship(
+        "TextAssignment", back_populates="text", uselist=False
+    )  # One-to-one
+
+
+# --- Clustering Result Tables ---
+
+
+class Category(Base):
+    __tablename__ = "categories"
+
+    id = Column(
+        Integer,
+        category_id_seq,
+        server_default=category_id_seq.next_value(),
+        primary_key=True,
+    )
+    dataset_id = Column(
+        Integer, ForeignKey("dataset_metadata.id"), nullable=False, index=True
+    )
+    version = Column(Integer, nullable=False, index=True)  # Clustering version
+    l2_cluster_id = Column(
+        Integer, nullable=False
+    )  # The ID assigned by L2 HDBSCAN (-1 for noise/unclustered)
+    name = Column(String, nullable=False)  # Generated category name
+    # total_l1_clusters = Column(Integer) # Count of L1 clusters belonging to this category
+
+    # Relationships
+    dataset = relationship("DatasetMetadata", back_populates="categories")
+    level1_clusters = relationship("Level1Cluster", back_populates="category")
+
+    # Unique constraint per dataset and version
+    __table_args__ = (
+        UniqueConstraint(
+            "dataset_id", "version", "l2_cluster_id", name="uq_category_per_version"
+        ),
+        Index("ix_category_dataset_version", "dataset_id", "version"),
+    )
+
+
+class Level1Cluster(Base):
+    __tablename__ = "level1_clusters"
+
+    id = Column(
+        Integer,
+        l1_cluster_id_seq,
+        server_default=l1_cluster_id_seq.next_value(),
+        primary_key=True,
+    )
+    category_id = Column(
+        Integer, ForeignKey("categories.id"), nullable=False, index=True
+    )  # Link to parent Category
+    version = Column(
+        Integer, nullable=False, index=True
+    )  # Clustering version (denormalized for easier querying)
+    l1_cluster_id = Column(
+        Integer, nullable=False
+    )  # The ID assigned by L1 HDBSCAN (-1 for noise)
+    title = Column(String, nullable=False)  # Generated title for this L1 cluster
+    # total_texts = Column(Integer) # Count of texts directly assigned here
+
+    # Relationships
+    category = relationship("Category", back_populates="level1_clusters")
+    text_assignments = relationship("TextAssignment", back_populates="level1_cluster")
+
+    # Unique constraint per category and version
+    __table_args__ = (
+        UniqueConstraint(
+            "category_id",
+            "version",
+            "l1_cluster_id",
+            name="uq_l1_cluster_per_category_version",
+        ),
+        Index("ix_l1_cluster_category_version", "category_id", "version"),
+    )
+
+
+class TextAssignment(Base):
+    __tablename__ = "text_assignments"
+
+    id = Column(
+        Integer,
+        assignment_id_seq,
+        server_default=assignment_id_seq.next_value(),
+        primary_key=True,
+    )
+    text_id = Column(
+        Integer, ForeignKey("texts.id"), nullable=False, index=True
+    )  # Each text can be assigned to different clusters in different versions
+    version = Column(Integer, nullable=False, index=True)  # Clustering version
+    level1_cluster_id = Column(
+        Integer, ForeignKey("level1_clusters.id"), nullable=False, index=True
+    )  # Assigned L1 Cluster DB ID
+    l1_probability = Column(Float, nullable=False)  # Probability from L1 clustering
+    l2_probability = Column(
+        Float, nullable=False
+    )  # Probability from L2 clustering (based on title)
+
+    # Relationships
+    text = relationship("TextDB", back_populates="assignment")
+    level1_cluster = relationship("Level1Cluster", back_populates="text_assignments")
+
+    # Unique constraint on text_id and version combination
+    __table_args__ = (
+        UniqueConstraint("text_id", "version", name="uq_text_assignment_per_version"),
+        Index("ix_assignment_version_l1", "version", "level1_cluster_id"),
+    )
+
+
+# --- Other Tables (Mostly Unchanged) ---
+
+
+class DownloadStatus(Base):
+    __tablename__ = "download_status"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    dataset_name = Column(String, nullable=False)
+    status = Column(String, default="downloading")  # downloading, completed, failed
+    progress = Column(Float, default=0.0)
+    error_message = Column(String)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+# --- Subcluster Tables ---
+
+# Define sequences for new tables
+subcluster_id_seq = Sequence("subclusters_id_seq")
+text_cluster_id_seq = Sequence("text_clusters_id_seq")
+
+
+class Subcluster(Base):
+    __tablename__ = "subclusters"
+
+    id = Column(
+        Integer,
+        subcluster_id_seq,
+        server_default=subcluster_id_seq.next_value(),
+        primary_key=True,
+    )
+    category_id = Column(
+        Integer, ForeignKey("categories.id"), nullable=False, index=True
+    )
+    title = Column(String, nullable=False)
+    row_count = Column(Integer, nullable=False)
+    percentage = Column(Float, nullable=False)
+    version = Column(Integer, nullable=False, index=True)
+
+    # Relationships
+    category = relationship("Category")
+    text_clusters = relationship("TextCluster", back_populates="subcluster")
+
+    # Indexes
+    __table_args__ = (
+        Index("ix_subcluster_category_version", "category_id", "version"),
+    )
+
+
+class TextCluster(Base):
+    __tablename__ = "text_clusters"
+
+    id = Column(
+        Integer,
+        text_cluster_id_seq,
+        server_default=text_cluster_id_seq.next_value(),
+        primary_key=True,
+    )
+    text_id = Column(Integer, ForeignKey("texts.id"), nullable=False, index=True)
+    subcluster_id = Column(
+        Integer, ForeignKey("subclusters.id"), nullable=False, index=True
+    )
+    membership_score = Column(Float, nullable=False)
+
+    # Relationships
+    subcluster = relationship("Subcluster", back_populates="text_clusters")
+
+    # Unique constraint - a text can only be in one subcluster
+    __table_args__ = (
+        UniqueConstraint("text_id", "subcluster_id", name="uq_text_subcluster"),
+        Index("ix_text_clusters_subcluster", "subcluster_id"),
+    )
 
 
 class ClusteringHistory(Base):
@@ -148,83 +273,150 @@ class ClusteringHistory(Base):
 
     id = Column(
         Integer,
-        clustering_history_id_seq,
-        server_default=clustering_history_id_seq.next_value(),
+        history_id_seq,
+        server_default=history_id_seq.next_value(),
         primary_key=True,
     )
-    dataset_id = Column(Integer, ForeignKey("dataset_metadata.id"))
-    clustering_status = Column(String, nullable=False)
-    titling_status = Column(String, nullable=False)
-    created_at = Column(DateTime(timezone=False), nullable=False)
-    completed_at = Column(DateTime(timezone=False))
-    error_message = Column(String)
-    clustering_version = Column(Integer, nullable=False, default=1)
+    dataset_id = Column(
+        Integer, ForeignKey("dataset_metadata.id"), nullable=False, index=True
+    )
+    clustering_version = Column(
+        Integer, nullable=False, index=True
+    )  # Explicit version number
+    clustering_status = Column(
+        String, nullable=False
+    )  # e.g., started, embedding, clustering_l1, titling_l1, clustering_l2, naming_l2, saving, completed, failed
+    # titling_status = Column(String, nullable=False) # Maybe combine into clustering_status
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    error_message = Column(String, nullable=True)
+    details = Column(
+        String, nullable=True
+    )  # Store metadata like counts, parameters used? JSON?
 
-    # Relationship with DatasetMetadata
-    dataset = relationship("DatasetMetadata", back_populates="clustering_attempts")
+    # Relationships
+    dataset = relationship("DatasetMetadata", back_populates="clustering_history")
+
+    # Unique constraint per dataset and version
+    __table_args__ = (
+        UniqueConstraint(
+            "dataset_id", "clustering_version", name="uq_clustering_history_version"
+        ),
+        Index("ix_history_dataset_version", "dataset_id", "clustering_version"),
+    )
 
 
-# Pydantic models for responses
-class CategoryResponse(BaseModel):
-    id: int
+# --- Pydantic Models for API ---
+
+
+class DatasetRequest(BaseModel):
     name: str
-    total_rows: int
-    percentage: float
-    model_config = ConfigDict(from_attributes=True)
+    description: Optional[str] = None
+    source: str  # 'url' or 'upload'
+    identifier: str  # URL or filename
 
 
-class SubclusterResponse(BaseModel):
+class TextDBResponse(BaseModel):
     id: int
-    category_id: int
+    text: str
+
+    class Config:
+        from_attributes = True
+
+
+class Level1ClusterResponse(BaseModel):
+    id: int  # DB ID
+    l1_cluster_id: int  # HDBSCAN L1 ID
     title: str
-    row_count: int
-    percentage: float
-    model_config = ConfigDict(from_attributes=True)
+    # total_texts: Optional[int] = None
+    texts: List[TextDBResponse] = []  # Include assigned texts? Might be too large.
+    text_count: int = 0  # Add this field to show total count of texts
+
+    class Config:
+        from_attributes = True
 
 
+class CategoryResponse(BaseModel):
+    id: int  # DB ID
+    l2_cluster_id: int  # HDBSCAN L2 ID
+    name: str
+    # total_l1_clusters: Optional[int] = None
+    level1_clusters: List[Level1ClusterResponse] = []  # Include L1 clusters?
+    category_text_count: int = 0  # Add total texts for this category
+
+    class Config:
+        from_attributes = True
+
+
+# Response model for the dataset list endpoint
 class DatasetMetadataResponse(BaseModel):
     id: int
     name: str
-    subset: Optional[str]
-    split: Optional[str]
-    download_date: datetime
+    description: Optional[str] = None
+    source: Optional[str] = None
+    identifier: Optional[str] = None
+    created_at: datetime
+    status: str
+    verification_status: str
+    clustering_status: str
     is_clustered: bool
-    status: DownloadStatus
-    model_config = ConfigDict(from_attributes=True)
+    total_rows: Optional[int] = None
+    error_message: Optional[str] = None
+    latest_version: Optional[int] = None  # Add latest successful version
+
+    class Config:
+        from_attributes = True
 
 
-# Configure Pydantic to work with SQLAlchemy models
-class SQLModel(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+# Response model for individual dataset retrieval (potentially including clusters)
+class DatasetDetailResponse(DatasetMetadataResponse):
+    categories: Optional[List["CategoryResponse"]] = None  # Use forward reference
+    dataset_total_texts: Optional[int] = None  # Add total texts for the dataset version
+
+    class Config:
+        from_attributes = True
 
 
-class Config:
-    arbitrary_types_allowed = True
+# Response model for text assignments (maybe useful for specific queries)
+class TextAssignmentResponse(BaseModel):
+    text_id: int
+    text: str  # Denormalize for convenience?
+    version: int
+    l1_cluster_id: int  # L1 DB ID
+    l1_title: str  # Denormalize
+    l1_prob: float
+    category_id: int  # Category DB ID
+    category_name: str  # Denormalize
+    l2_prob: float
+
+    class Config:
+        from_attributes = True
 
 
-class DatasetStatus(str, Enum):
-    PENDING = "pending"
-    DOWNLOADING = "downloading"
-    COMPLETED = "completed"
-    FAILED = "failed"
+# Model for clustering request (if needed separately)
+class ClusterRequest(BaseModel):
+    dataset_id: int
+    # Add parameters if clustering can be configured via API
 
 
-class ClusteringStatus(str, Enum):
-    NOT_STARTED = "not_started"
+# Add DownloadStatusEnum
+class DownloadStatusEnum(str, Enum):
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
     FAILED = "failed"
 
 
-class DatasetResponse(BaseModel):
-    id: int
-    name: str
-    subset: Optional[str] = None
-    split: Optional[str] = None
-    status: str
-    download_date: datetime
-    is_clustered: bool
-    clustering_status: Optional[str] = "not_started"
+# Add DownloadStatusUpdate Pydantic model
+class DownloadStatusUpdate(BaseModel):
+    status: DownloadStatusEnum
 
     class Config:
         from_attributes = True
+
+
+# Enum for Clustering Status
+class ClusteringStatus(str, Enum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
