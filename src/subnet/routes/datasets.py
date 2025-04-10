@@ -38,6 +38,7 @@ from utils.clustering import cluster_texts
 from sqlalchemy import func, desc
 from datetime import datetime
 from openai import OpenAI
+from utils.huggingface_utils import get_dataset_configs
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -560,16 +561,91 @@ async def create_dataset_endpoint(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
-    # ... (Existing dataset creation/download endpoint logic - needs review)
-    # Make sure download_and_save_dataset is called correctly if using it
-    logger.warning("Dataset creation endpoint might need updates for text insertion.")
-    # Example call (assuming download_and_save_dataset is adapted)
-    # download_and_save_dataset(db, request)
-    # Find the created dataset metadata to return
-    # metadata = db.query(DatasetMetadata).filter(DatasetMetadata.name == request.name).first()
-    # if not metadata: raise HTTPException(404)
-    # return metadata
-    raise NotImplementedError("Dataset creation endpoint needs review/implementation.")
+    """Create a new dataset, supporting HuggingFace and other sources."""
+    try:
+        # Check if dataset with same name already exists
+        existing = (
+            db.query(DatasetMetadata)
+            .filter(DatasetMetadata.name == request.name)
+            .first()
+        )
+        if existing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Dataset with name '{request.name}' already exists",
+            )
+
+        # Initialize new dataset metadata
+        new_dataset = DatasetMetadata(
+            name=request.name,
+            description=request.description,
+            source=request.source,
+            identifier=request.identifier,  # Use the primary identifier field
+            status="pending",
+            verification_status="pending",
+            clustering_status="pending",
+            is_clustered=False,
+        )
+
+        # Handle different data sources
+        if request.source.lower() == "huggingface":
+            if not request.hf_dataset_name:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Missing required field: hf_dataset_name for HuggingFace source",
+                )
+
+            # Set Hugging Face specific fields
+            new_dataset.hf_dataset_name = request.hf_dataset_name
+            new_dataset.hf_config = request.hf_config
+            new_dataset.hf_split = request.hf_split
+            new_dataset.hf_revision = request.hf_revision  # Store requested revision
+
+            # Initial save to get an ID
+            db.add(new_dataset)
+            db.commit()
+            db.refresh(new_dataset)
+
+            # Start download in background
+            background_tasks.add_task(
+                process_huggingface_dataset,
+                # Pass db session creator if needed, or rely on SessionLocal inside task
+                new_dataset.id,
+                request.hf_dataset_name,
+                request.hf_config,
+                request.hf_split,
+                request.hf_revision,  # Pass revision
+                request.hf_token,
+                request.text_field,  # Pass text field hint
+                request.label_field,  # Pass label field hint
+                request.selected_columns,  # Pass selected columns
+                request.limit_rows,
+            )
+
+            # Update status to downloading
+            new_dataset.status = "downloading"
+            db.commit()
+
+            logger.info(
+                f"Started HuggingFace dataset download: {request.hf_dataset_name} (Rev: {request.hf_revision})"
+            )
+
+        else:
+            # Handle other data sources (placeholder for future implementation)
+            raise HTTPException(
+                status_code=400,
+                detail=f"Data source '{request.source}' not supported yet",
+            )
+
+        # Return the created dataset metadata
+        response_data = DatasetMetadataResponse.model_validate(new_dataset)
+        # You might want to add other relevant fields from the request to the response
+        return response_data
+
+    except Exception as e:
+        logger.exception(f"Error creating dataset: {e}")
+        db.rollback()  # Ensure rollback on error
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/{dataset_id}/cluster", status_code=202)
@@ -831,3 +907,181 @@ async def run_clustering_task(
 
     finally:
         db.close()  # Ensure session is closed in background task
+
+
+async def process_huggingface_dataset(
+    db: Session,
+    dataset_id: int,
+    hf_dataset_name: str,
+    hf_config: Optional[str] = None,
+    hf_split: Optional[str] = None,
+    hf_revision: Optional[str] = None,
+    hf_token: Optional[str] = None,
+    text_field_hint: Optional[str] = None,
+    label_field_hint: Optional[str] = None,
+    selected_columns: Optional[List[str]] = None,
+    limit_rows: Optional[int] = None,
+):
+    """Process a Hugging Face dataset download in the background."""
+    from ..utils.huggingface_utils import (
+        download_hf_dataset,
+        generate_field_mappings,
+        save_dataset_to_parquet,
+        insert_texts_from_dataframe,
+    )
+
+    try:
+        # Get dataset metadata from database
+        with SessionLocal() as local_db:
+            dataset = (
+                local_db.query(DatasetMetadata)
+                .filter(DatasetMetadata.id == dataset_id)
+                .first()
+            )
+            if not dataset:
+                logger.error(f"Dataset with ID {dataset_id} not found")
+                return
+
+            # Update status to downloading
+            dataset.status = "downloading"
+            local_db.commit()
+
+            # Check for text field
+            if not text_field_hint:
+                raise ValueError(
+                    "Text field must be explicitly specified. Auto-detection is no longer supported."
+                )
+
+            # Download dataset from HuggingFace
+            df, schema_info = download_hf_dataset(
+                hf_dataset_name,
+                config=hf_config,
+                split=hf_split,
+                revision=hf_revision,
+                token=hf_token,
+                limit_rows=limit_rows,
+                selected_columns=selected_columns,
+            )
+
+            # Generate field mappings using explicitly provided fields
+            try:
+                field_mappings = generate_field_mappings(
+                    df, text_field_hint, label_field_hint
+                )
+            except ValueError as e:
+                raise ValueError(f"Field mapping error: {str(e)}")
+
+            # Save dataset to disk
+            parquet_path, schema_path = save_dataset_to_parquet(
+                df, hf_dataset_name, hf_config, hf_split
+            )
+
+            # Update dataset metadata
+            dataset.file_path = parquet_path
+            dataset.dataset_schema = json.dumps(schema_info)
+            dataset.field_mappings = json.dumps(field_mappings)
+            dataset.status = "downloaded"
+            dataset.verification_status = "valid"
+            dataset.total_rows = schema_info["num_rows"]
+            dataset.hf_revision = schema_info.get("revision_used")
+            local_db.commit()
+
+            # Insert texts into TextDB using the mapped text field
+            try:
+                text_count = insert_texts_from_dataframe(
+                    local_db, df, dataset_id, field_mappings
+                )
+                logger.info(
+                    f"Successfully processed HuggingFace dataset {hf_dataset_name}. Inserted/associated {text_count} texts."
+                )
+            except ValueError as e:
+                raise ValueError(f"Text insertion error: {str(e)}")
+
+            # Final status update
+            dataset.status = "completed"
+            local_db.commit()
+
+    except Exception as e:
+        logger.exception(f"Error processing HuggingFace dataset: {e}")
+
+        # Update error status in DB
+        with SessionLocal() as error_db:
+            dataset = (
+                error_db.query(DatasetMetadata)
+                .filter(DatasetMetadata.id == dataset_id)
+                .first()
+            )
+            if dataset:
+                dataset.status = "failed"
+                dataset.error_message = str(e)[:1000]
+                error_db.commit()
+
+
+@router.get("/huggingface/info")
+async def get_huggingface_dataset_info(dataset_name: str, token: Optional[str] = None):
+    """Get information about a Hugging Face dataset."""
+    try:
+        from ..utils.huggingface_utils import get_dataset_info
+
+        info = get_dataset_info(dataset_name, token)
+        return info
+    except Exception as e:
+        logger.exception(f"Error fetching HuggingFace dataset info: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/huggingface/configs")
+async def get_huggingface_dataset_configs(
+    dataset_name: str, token: Optional[str] = None
+):
+    """Get available configurations for a Hugging Face dataset."""
+    try:
+
+        configs = get_dataset_configs(dataset_name, token)
+        return {"configs": configs}
+    except Exception as e:
+        logger.exception(f"Error fetching HuggingFace dataset configs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/huggingface/splits")
+async def get_huggingface_dataset_splits(
+    dataset_name: str, config: Optional[str] = None, token: Optional[str] = None
+):
+    """Get available splits for a Hugging Face dataset configuration."""
+    try:
+        from utils.huggingface_utils import get_dataset_splits
+
+        splits = get_dataset_splits(dataset_name, config, token)
+        return {"splits": splits}
+    except Exception as e:
+        logger.exception(f"Error fetching HuggingFace dataset splits: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/huggingface/features", response_model=Dict)
+async def get_huggingface_dataset_features(
+    dataset_name: str, config: Optional[str] = None, token: Optional[str] = None
+):
+    """Get features (schema) for a HuggingFace dataset configuration."""
+    try:
+        from utils.huggingface_utils import get_dataset_features
+
+        features = get_dataset_features(dataset_name, config, token)
+        return features
+    except Exception as e:
+        logger.error(f"Error fetching HuggingFace dataset features: {str(e)}")
+        if "not found" in str(e).lower():
+            raise HTTPException(
+                status_code=404,
+                detail=f"Dataset '{dataset_name}' not found on Hugging Face.",
+            )
+
+        max_error_length = 1000  # Limit the error message length
+        short_error = str(e)[:max_error_length]
+        if len(str(e)) > max_error_length:
+            short_error += "... (truncated)"
+
+        raise HTTPException(
+            status_code=500, detail=f"Error fetching features: {short_error}"
+        )

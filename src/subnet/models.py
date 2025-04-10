@@ -44,7 +44,7 @@ class DatasetMetadata(Base):
     )
     name = Column(String, nullable=False, unique=True)
     description = Column(String)
-    source = Column(String)  # e.g., 'url', 'upload'
+    source = Column(String)  # e.g., 'url', 'upload', 'huggingface'
     identifier = Column(String)  # e.g., URL or original filename
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     status = Column(
@@ -62,6 +62,20 @@ class DatasetMetadata(Base):
     total_rows = Column(Integer)
     error_message = Column(String)  # For download/verification errors
     file_path = Column(String)  # Path where the dataset is stored locally
+
+    # New fields for Hugging Face integration
+    hf_dataset_name = Column(
+        String
+    )  # The actual dataset name on HF (e.g., "databricks/databricks-dolly-15k")
+    hf_config = Column(String)  # Dataset configuration name
+    hf_split = Column(String)  # Dataset split (train, test, validation)
+    hf_revision = Column(String)  # Dataset version/revision
+
+    # Schema information for flexible datasets
+    dataset_schema = Column(String)  # JSON string representing dataset schema
+    field_mappings = Column(
+        String
+    )  # JSON mapping of HF fields to our system (e.g., {"text_field": "content"})
 
     # Relationships
     texts = relationship("TextDB", back_populates="dataset")
@@ -310,10 +324,31 @@ class ClusteringHistory(Base):
 
 
 class DatasetRequest(BaseModel):
-    name: str
+    name: str  # Display name for the dataset
     description: Optional[str] = None
-    source: str  # 'url' or 'upload'
-    identifier: str  # URL or filename
+    source: str  # 'huggingface', 'url', or 'upload'
+    identifier: str  # URL, filename, or HF dataset ID
+
+    # Hugging Face specific parameters
+    hf_dataset_name: Optional[str] = (
+        None  # Full dataset name (e.g., "databricks/databricks-dolly-15k")
+    )
+    hf_config: Optional[str] = None  # Dataset configuration
+    hf_split: Optional[str] = None  # Dataset split (train, test, validation)
+    hf_revision: Optional[str] = (
+        None  # Dataset version/commit hash (for reproducibility)
+    )
+    hf_token: Optional[str] = None  # HF token for private datasets
+
+    # Column selection & Field mapping
+    selected_columns: Optional[List[str]] = None  # List of columns user wants to import
+    text_field: Optional[str] = None  # Which field contains the text for clustering
+    label_field: Optional[str] = (
+        None  # Which field contains predefined labels/categories
+    )
+
+    # Other options
+    limit_rows: Optional[int] = None  # Limit number of rows to download (0 = all)
 
 
 class TextDBResponse(BaseModel):

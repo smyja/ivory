@@ -11,8 +11,8 @@ from routes.api import router as api_router
 # Load environment variables
 load_dotenv()
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
+# Set up logging - Change to WARNING level to reduce verbosity
+logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # Check for OPENROUTER_API_KEY
