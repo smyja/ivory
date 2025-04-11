@@ -21,7 +21,6 @@ import hdbscan
 import numpy as np
 import logging
 import asyncio
-from utils.database import get_duckdb_connection
 import gc
 import os
 import time
@@ -53,158 +52,145 @@ def retry_on_lock(
     attempt = 0
     while True:
         try:
-            with get_duckdb_connection() as conn:
-                yield conn
-                break
+            # Removed DuckDB connection logic - relying on SQLAlchemy session from caller
+            # The caller should manage the session and transaction
+            # This context manager might not be needed anymore if locks are handled by SQLAlchemy/DB engine
+            yield  # Just yield to indicate success
+            break
         except Exception as e:
-            attempt += 1
-            if attempt >= max_retries:
-                logger.error(f"Failed after {max_retries} attempts: {str(e)}")
-                raise
-            if "Conflicting lock" in str(e):
-                logger.warning(
-                    f"Database locked, retrying in {delay} seconds (attempt {attempt}/{max_retries})"
-                )
-                time.sleep(delay)
-            else:
-                raise
+            # Re-raise immediately as lock handling is assumed to be external now
+            logger.error(f"Error during operation: {e}")
+            raise
 
 
-def cleanup_dataset_data(dataset_id: int) -> None:
-    """Clean up existing data for a dataset with retry logic."""
+def cleanup_dataset_data(db: Session, dataset_id: int) -> None:
+    """Clean up existing data for a dataset using the provided SQLAlchemy session."""
     try:
-        with retry_on_lock() as cleanup_conn:
-            # First delete text_clusters entries
-            cleanup_conn.execute(
-                """
-                DELETE FROM text_clusters tc
-                WHERE tc.subcluster_id IN (
-                    SELECT s.id 
-                    FROM subclusters s
-                    JOIN categories c ON s.category_id = c.id
-                    WHERE c.dataset_id = ?
-                )
-                """,
-                [dataset_id],
-            )
+        # Use the provided session directly
+        # First delete text_assignments linked to the version's L1 clusters
+        # This requires joining through categories if L1 clusters don't store dataset_id directly
+        # Assuming Level1Cluster has category_id and Category has dataset_id
+        l1_clusters_subquery = (
+            db.query(Level1Cluster.id)
+            .join(Category, Level1Cluster.category_id == Category.id)
+            .filter(Category.dataset_id == dataset_id)
+            .filter(Level1Cluster.version == 1)  # Assuming version 1 for now
+            .subquery()
+        )
 
-            # Then delete subclusters
-            cleanup_conn.execute(
-                """
-                DELETE FROM subclusters 
-                WHERE category_id IN (
-                    SELECT id 
-                    FROM categories 
-                    WHERE dataset_id = ?
-                )
-                """,
-                [dataset_id],
-            )
+        delete_assignments_stmt = TextAssignment.__table__.delete().where(
+            TextAssignment.level1_cluster_id.in_(l1_clusters_subquery)
+        )
+        db.execute(delete_assignments_stmt)
+        logger.info(f"Deleted text assignments for dataset {dataset_id}")
 
-            # Then delete categories
-            cleanup_conn.execute(
-                """
-                DELETE FROM categories 
-                WHERE dataset_id = ?
-                """,
-                [dataset_id],
-            )
+        # Then delete Level1Clusters
+        delete_l1_stmt = Level1Cluster.__table__.delete().where(
+            Level1Cluster.id.in_(l1_clusters_subquery)
+        )
+        db.execute(delete_l1_stmt)
+        logger.info(f"Deleted L1 clusters for dataset {dataset_id}")
 
-            # Finally clean up orphaned texts
-            cleanup_conn.execute(
-                """
-                DELETE FROM texts
-                WHERE dataset_id = ?
-                AND id NOT IN (
-                    SELECT DISTINCT text_id
-                    FROM text_clusters
-                )
-                """,
-                [dataset_id],
-            )
+        # Then delete Categories
+        delete_cat_stmt = Category.__table__.delete().where(
+            Category.dataset_id == dataset_id
+        )
+        db.execute(delete_cat_stmt)
+        logger.info(f"Deleted categories for dataset {dataset_id}")
+
+        # Finally clean up orphaned texts (texts not in any assignment for this dataset)
+        # This might be complex depending on whether texts can belong to multiple versions
+        # For simplicity, let's assume for now we only delete texts linked ONLY to this dataset
+        # and not part of *any* assignment.
+        # A safer approach might be to only delete texts *if* they are associated *only* with the clusters being deleted.
+        # For now, skipping orphaned text deletion to avoid accidental data loss.
+        # logger.info(f"Skipping orphaned text deletion for dataset {dataset_id}")
+
+        db.commit()  # Commit the cleanup
+
     except Exception as e:
-        logger.error(f"Failed to cleanup dataset data: {str(e)}")
+        logger.error(f"Failed to cleanup dataset data for ID {dataset_id}: {str(e)}")
+        db.rollback()  # Rollback on error
         raise
 
 
 async def create_single_level1_cluster(
+    db: Session,  # Pass the SQLAlchemy session
     category_db_id: int,
     texts_in_category: List[str],
     l2_probs_for_texts: np.ndarray,
     dataset_id: int,
     version: int,
 ):
-    """Creates a single Level1Cluster for a category (e.g., if too small or subclustering failed)."""
+    """Creates a single Level1Cluster for a category using SQLAlchemy session."""
     fallback_title = "General"  # Simple fallback title
     level1_cluster_db_id = None
     try:
-        with retry_on_lock() as conn:
-            # Insert into level1_clusters
-            conn.execute(
-                """
-                INSERT INTO level1_clusters (category_id, version, l1_cluster_id, title)
-                VALUES (?, ?, ?, ?)
-                RETURNING id
-                """,
-                [
-                    category_db_id,
-                    version,
-                    -2,  # Use -2 to signify a fallback cluster ID
-                    fallback_title,
-                ],
-            )
-            result = conn.fetchone()
-            if result:
-                level1_cluster_db_id = result[0]
-                logger.info(
-                    f"Inserted single fallback Level1Cluster ID {level1_cluster_db_id} for category {category_db_id}, version {version}."
-                )
-
-                # Insert into text_assignments
-                with retry_on_lock() as text_assign_conn:
-                    for i, text in enumerate(texts_in_category):
-                        # Use L2 probability as L1 probability here, L2 prob might be 0?
-                        l1_prob = (
-                            float(l2_probs_for_texts[i])
-                            if i < len(l2_probs_for_texts)
-                            else 0.0
-                        )
-                        l2_prob = (
-                            float(l2_probs_for_texts[i])
-                            if i < len(l2_probs_for_texts)
-                            else 0.0
-                        )
-
-                        # First, check if this text already has an assignment
-                        text_assign_conn.execute(
-                            """
-                            INSERT INTO text_assignments (text_id, version, level1_cluster_id, l1_probability, l2_probability)
-                            SELECT t.id, ?, ?, ?, ?
-                            FROM texts t
-                            WHERE t.dataset_id = ? AND t.text = ?
-                            AND NOT EXISTS (
-                                SELECT 1 FROM text_assignments ta 
-                                WHERE ta.text_id = t.id
-                            )
-                            """,
-                            [
-                                version,
-                                level1_cluster_db_id,
-                                l1_prob,
-                                l2_prob,
-                                dataset_id,
-                                text,
-                            ],
-                        )
-                    logger.info(
-                        f"Linked {len(texts_in_category)} texts to fallback Level1Cluster {level1_cluster_db_id}."
-                    )
-            else:
-                raise Exception("Fallback Level1Cluster insertion failed.")
-    except Exception as e_single:
-        logger.error(
-            f"Failed to create single fallback Level1Cluster for category {category_db_id}: {e_single}"
+        # Insert into level1_clusters using the session
+        new_l1_cluster = Level1Cluster(
+            category_id=category_db_id,
+            version=version,
+            l1_cluster_id=-2,  # Use -2 to signify a fallback cluster ID
+            title=fallback_title,
         )
+        db.add(new_l1_cluster)
+        db.flush()  # Get the ID
+        level1_cluster_db_id = new_l1_cluster.id
+        logger.info(
+            f"Inserted single fallback Level1Cluster ID {level1_cluster_db_id} for category {category_db_id}, version {version}."
+        )
+
+        # Prepare text assignments
+        assignment_records = []
+        # Need to get text_db_ids for the texts_in_category efficiently
+        text_to_id_map = {
+            t.text: t.id
+            for t in db.query(TextDB.id, TextDB.text)
+            .filter(TextDB.dataset_id == dataset_id, TextDB.text.in_(texts_in_category))
+            .all()
+        }
+
+        for i, text in enumerate(texts_in_category):
+            text_db_id = text_to_id_map.get(text)
+            if not text_db_id:
+                logger.warning(
+                    f"Could not find DB ID for text '{text[:50]}...' during fallback cluster assignment."
+                )
+                continue
+
+            l1_prob = (
+                float(l2_probs_for_texts[i]) if i < len(l2_probs_for_texts) else 0.0
+            )
+            l2_prob = (
+                float(l2_probs_for_texts[i]) if i < len(l2_probs_for_texts) else 0.0
+            )
+
+            assignment_records.append(
+                {
+                    "text_id": text_db_id,
+                    "version": version,
+                    "level1_cluster_id": level1_cluster_db_id,
+                    "l1_probability": l1_prob,
+                    "l2_probability": l2_prob,
+                }
+            )
+
+        if assignment_records:
+            db.bulk_insert_mappings(TextAssignment, assignment_records)
+            logger.info(
+                f"Linked {len(assignment_records)} texts to fallback Level1Cluster {level1_cluster_db_id}."
+            )
+        else:
+            logger.warning(
+                f"No texts could be linked to fallback Level1Cluster {level1_cluster_db_id}."
+            )
+
+        # No need to commit here, let the caller manage the transaction
+
+    except Exception as e:
+        logger.error(f"Error creating single L1 cluster: {e}")
+        # Don't rollback here, let caller handle transaction based on overall success
+        raise
 
 
 async def cluster_texts(
@@ -382,14 +368,6 @@ async def cluster_texts(
             # Generate category name using the semantic function
             category_name = await derive_overarching_category(cluster_texts)
 
-            # Limit category name length (simple approach)
-            # if category_name: # <-- Comment out this block
-            #     category_name = " ".join(
-            #         category_name.split()[:3]
-            #     )  # Limit to first 3 words
-            # else:
-            #     category_name = f"Category {l2_cluster_id_hdbscan}"  # Fallback name
-
             # Use fallback name only if LLM fails
             if not category_name:
                 category_name = f"Category {l2_cluster_id_hdbscan}"
@@ -472,6 +450,7 @@ async def cluster_texts(
                         )
                         # Use L2 probabilities as fallback probabilities
                         await create_single_level1_cluster(  # Call renamed helper
+                            db,
                             category_db_id,
                             cluster_texts,  # Texts for the whole L2 category
                             l2_probabilities_for_category,  # L2 probabilities for these texts
@@ -782,8 +761,8 @@ async def cluster_texts(
                     )
                     # Fallback: Create a single Level1Cluster if L1 clustering fails
                     await create_single_level1_cluster(  # Call renamed helper
+                        db,
                         category_db_id,
-                        cluster_texts,
                         l2_probabilities_for_category,  # Pass L2 probs
                         dataset_id,
                         version,
@@ -795,8 +774,8 @@ async def cluster_texts(
                     f"Creating single Level1Cluster for category {category_db_id} (L2 cluster {l2_cluster_id_hdbscan}), dataset {dataset_id} as L1 clustering was skipped."
                 )
                 await create_single_level1_cluster(  # Call renamed helper
+                    db,
                     category_db_id,
-                    cluster_texts,
                     l2_probabilities_for_category,
                     dataset_id,
                     version,
@@ -843,23 +822,11 @@ async def cluster_texts(
                 .filter(Category.dataset_id == dataset_id, Category.version == version)
                 .all()
             )
-            # No need to query Level1Cluster separately if eager loaded
-            # final_level1_clusters = []
-            # if final_categories:
-            #     category_ids = [c.id for c in final_categories]
-            #     final_level1_clusters = (
-            #         db.query(Level1Cluster)
-            #         .filter(Level1Cluster.category_id.in_(category_ids), Level1Cluster.version == version)
-            #         .all()
-            #     )
 
             logger.info(
                 f"Successfully fetched {len(final_categories)} categories (with L1 clusters eager loaded) for dataset {dataset_id}, version {version}."
             )
 
-            # The background task runner expects (categories, subclusters), but subclusters are now Level1Clusters
-            # For now, return categories only, assuming the runner handles this.
-            # Alternatively, adjust the runner `run_clustering_task`
             return final_categories, []  # Return empty list for second element for now
 
         except Exception as e_final:

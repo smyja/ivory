@@ -5,14 +5,13 @@ from contextlib import asynccontextmanager
 from fastapi.openapi.utils import get_openapi
 import logging
 from dotenv import load_dotenv
-from routes.datasets import router as dataset_router
-from routes.api import router as api_router
+from routes import api_router
 
 # Load environment variables
 load_dotenv()
 
-# Set up logging - Change to WARNING level to reduce verbosity
-logging.basicConfig(level=logging.WARNING)
+# Set up logging - Change to INFO level for more informative logs
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Check for OPENROUTER_API_KEY
@@ -48,8 +47,7 @@ app.add_middleware(
 )
 
 # Include routers
-app.include_router(dataset_router, prefix="/datasets", tags=["datasets"])
-app.include_router(api_router, tags=["api"])
+app.include_router(api_router)
 
 
 def custom_openapi():

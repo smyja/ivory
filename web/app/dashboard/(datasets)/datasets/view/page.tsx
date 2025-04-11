@@ -20,6 +20,7 @@ import {
   Modal,
   Title,
   LoadingOverlay,
+  Stack,
 } from '@mantine/core';
 import {
   IconCopy,
@@ -44,26 +45,31 @@ interface Record {
 }
 
 interface ApiResponse {
-  split: string;
-  total_records: number;
-  page: number;
-  page_size: number;
-  records: Record[];
+  metadata: {
+    id: number;
+    name: string;
+    status: string;
+  };
+  data: Record[];
+  pagination: {
+    total: number;
+    page: number;
+    page_size: number;
+    total_pages: number;
+  };
+  columns: string[];
+  format: string;
 }
 
 interface DatasetInfo {
   id: number;
   name: string;
-  subset: string | null;
-  split: string | null;
   status: string;
-  splits: {
-    [key: string]: {
-      columns: string[];
-      row_count: number;
-      sample_rows: Record[];
-    };
-  };
+  clustering_status: string;
+  is_clustered: boolean;
+  created_at: string;
+  source: string;
+  identifier: string;
 }
 
 const BACKEND_PAGE_SIZE = 10; // Fetch 100 records at a time from backend
@@ -118,16 +124,30 @@ const DatasetView: React.FC = () => {
     }
   }, [currentBackendPage]);
 
-  // Update displayed record when page changes
+  // Update displayed records when page changes
   useEffect(() => {
-    if (cachedRecords.length > 0) {
+    if (cachedRecords && cachedRecords.length > 0) {
+      // Calculate the index within the current backend page/chunk
       const indexInBackendPage = (currentPage - 1) % BACKEND_PAGE_SIZE;
-      if (cachedRecords[indexInBackendPage]) {
-        setFilteredRecords([cachedRecords[indexInBackendPage]]);
-        setRecords([cachedRecords[indexInBackendPage]]);
+
+      // Check if the required record exists in the current cache
+      if (indexInBackendPage >= 0 && indexInBackendPage < cachedRecords.length) {
+        const currentRecord = cachedRecords[indexInBackendPage];
+        // Set only the single record for display
+        setFilteredRecords([currentRecord]);
+        setRecords([currentRecord]);
+      } else {
+        // Record not in cache, likely waiting for fetchBackendPage to update cache
+        setFilteredRecords([]);
+        setRecords([]);
+        // The other useEffect hooks handle fetching the correct backend page
       }
+    } else {
+      // No cached records yet
+      setFilteredRecords([]);
+      setRecords([]);
     }
-  }, [currentPage, cachedRecords]);
+  }, [currentPage, cachedRecords]); // Rerun when page changes or cache updates
 
   const fetchDatasetInfo = async () => {
     try {
@@ -177,11 +197,23 @@ const DatasetView: React.FC = () => {
       }
 
       const data: ApiResponse = await response.json();
-      setCachedRecords(data.records);
-      setTotalRecords(data.total_records);
-      // Show the first record
-      setFilteredRecords([data.records[0]]);
-      setRecords([data.records[0]]);
+
+      // Check if data and data.data exist
+      if (!data || !data.data) {
+        throw new Error('Invalid response format: records data is missing');
+      }
+
+      setCachedRecords(data.data);
+      setTotalRecords(data.pagination.total);
+
+      // Show only the first record initially (currentPage is 1)
+      if (data.data && data.data.length > 0) {
+        setFilteredRecords([data.data[0]]);
+        setRecords([data.data[0]]);
+      } else {
+        setFilteredRecords([]);
+        setRecords([]);
+      }
     } catch (error: any) {
       setError(error.message);
       notifications.show({
@@ -189,6 +221,10 @@ const DatasetView: React.FC = () => {
         message: error.message,
         color: 'red',
       });
+      // Set empty arrays to prevent undefined errors
+      setCachedRecords([]);
+      setFilteredRecords([]);
+      setRecords([]);
     } finally {
       setIsInitialLoading(false);
     }
@@ -223,12 +259,19 @@ const DatasetView: React.FC = () => {
       }
 
       const data: ApiResponse = await response.json();
-      setCachedRecords(data.records);
 
-      // Calculate the index in the current backend page
-      const indexInBackendPage = (currentPage - 1) % BACKEND_PAGE_SIZE;
-      setFilteredRecords([data.records[indexInBackendPage]]);
-      setRecords([data.records[indexInBackendPage]]);
+      // Check if data and data.data exist
+      if (!data || !data.data) {
+        throw new Error('Invalid response format: records data is missing');
+      }
+
+      // Update the cache with the new chunk of records
+      setCachedRecords(data.data);
+
+      // The useEffect hook listening to [currentPage, cachedRecords] will handle
+      // selecting and displaying the correct single record from this new cache.
+      // No need to setFilteredRecords/setRecords here directly anymore.
+
     } catch (error: any) {
       setError(error.message);
       notifications.show({
@@ -236,6 +279,10 @@ const DatasetView: React.FC = () => {
         message: error.message,
         color: 'red',
       });
+      // Set empty arrays to prevent undefined errors
+      setCachedRecords([]);
+      setFilteredRecords([]);
+      setRecords([]);
     } finally {
       setIsPageLoading(false);
     }
@@ -312,11 +359,18 @@ const DatasetView: React.FC = () => {
         throw new Error('Failed to search records');
       }
       const data: ApiResponse = await response.json();
-      setCachedRecords(data.records);
-      setTotalRecords(data.total_records);
+      setCachedRecords(data.data);
+      setTotalRecords(data.pagination.total);
       setCurrentPage(1);
-      // Show the first record of search results
-      setFilteredRecords([data.records[0]]);
+
+      // Show the first record of the search results
+      if (data.data && data.data.length > 0) {
+        setFilteredRecords([data.data[0]]);
+        setRecords([data.data[0]]);
+      } else {
+        setFilteredRecords([]);
+        setRecords([]);
+      }
     } catch (error: any) {
       notifications.show({
         title: 'Error',
@@ -378,8 +432,8 @@ const DatasetView: React.FC = () => {
           <div>
             <Title order={2}>{datasetInfo?.name || 'Loading...'}</Title>
             <Text c="dimmed" size="sm">
-              {datasetInfo?.subset ? `Subset: ${datasetInfo.subset}` : 'No subset'} •{' '}
-              {datasetInfo?.split ? `Split: ${datasetInfo.split}` : 'No split'}
+              {datasetInfo?.identifier ? `Identifier: ${datasetInfo.identifier}` : 'No identifier'} •{' '}
+              {datasetInfo?.status ? `Status: ${datasetInfo.status}` : 'No status'}
               {subclusterId && ' • Viewing Subcluster Texts'}
             </Text>
           </div>
@@ -442,7 +496,7 @@ const DatasetView: React.FC = () => {
                 <Group gap="xs">
                   <CustomPagination
                     currentPage={currentPage}
-                    totalPages={totalRecords} // Since PAGE_SIZE is 1, totalPages equals totalRecords
+                    totalPages={totalRecords} // Display total records as total pages
                     onPageChange={setCurrentPage}
                     disabled={isPageLoading}
                   />
@@ -477,68 +531,16 @@ const DatasetView: React.FC = () => {
                 <Text c="red">{error}</Text>
               ) : filteredRecords.length > 0 ? (
                 <>
-                  {getOriginalFields(filteredRecords[0]).map(([fieldKey, fieldValue], index) => (
-                    <React.Fragment key={fieldKey}>
-                      <Group justify="space-between" mb="xs">
-                        <Badge color={fieldKey === 'chat' ? 'blue' : 'gray'}>{fieldKey}</Badge>
-                        <Group gap="xs">
-                          <CopyButton value={fieldValue} timeout={2000}>
-                            {({ copied, copy }) => (
-                              <Tooltip label={copied ? 'Copied' : 'Copy'} withArrow position="right">
-                                <ActionIcon color={copied ? 'teal' : 'gray'} variant="subtle" onClick={copy}>
-                                  {copied ? (
-                                    <IconCheck style={{ width: rem(16) }} />
-                                  ) : (
-                                    <IconCopy style={{ width: rem(16) }} />
-                                  )}
-                                </ActionIcon>
-                              </Tooltip>
-                            )}
-                          </CopyButton>
-                          <Tooltip label="Expand" withArrow position="right">
-                            <ActionIcon
-                              color="blue"
-                              variant="subtle"
-                              onClick={() => {
-                                setSelectedRecord({ key: fieldKey, value: fieldValue });
-                                setModalOpen(true);
-                              }}
-                            >
-                              <IconMaximize style={{ width: rem(16) }} />
-                            </ActionIcon>
-                          </Tooltip>
-                        </Group>
-                      </Group>
-                      <pre style={preStyles}>
-                        <Highlight highlight={searchTerms}>{fieldValue}</Highlight>
-                      </pre>
-                      {index < getOriginalFields(filteredRecords[0]).length - 1 && <Divider my="md" />}
-                    </React.Fragment>
-                  ))}
-
-                  {getStructuredFields(filteredRecords[0]).length > 0 && (
-                    <>
-                      <Divider my="md" label="Structured Content" labelPosition="center" />
-                      <div style={{ paddingLeft: rem(20) }}>
-                        {getStructuredFields(filteredRecords[0]).map((field, index) => (
-                          <React.Fragment key={index}>
-                            <Group gap="xs" mb="xs">
-                              <Group gap={4}>
-                                <Text color="dimmed" size="sm">└─</Text>
-                                <Badge
-                                  color="pink"
-                                  variant="light"
-                                  style={{ cursor: 'pointer' }}
-                                  onClick={() => {
-                                    setSelectedRecord({ key: field.key, value: field.value });
-                                    setModalOpen(true);
-                                  }}
-                                >
-                                  {field.key}
-                                </Badge>
-                              </Group>
+                  {(() => {
+                    const record = filteredRecords[0]; // Get the single record for the current page
+                    return (
+                      <>
+                        {getOriginalFields(record).map(([fieldKey, fieldValue], fieldIndex) => (
+                          <React.Fragment key={fieldKey}>
+                            <Group justify="space-between" mb="xs">
+                              <Badge color={fieldKey === 'chat' ? 'blue' : 'gray'}>{fieldKey}</Badge>
                               <Group gap="xs">
-                                <CopyButton value={field.value} timeout={2000}>
+                                <CopyButton value={fieldValue} timeout={2000}>
                                   {({ copied, copy }) => (
                                     <Tooltip label={copied ? 'Copied' : 'Copy'} withArrow position="right">
                                       <ActionIcon color={copied ? 'teal' : 'gray'} variant="subtle" onClick={copy}>
@@ -556,7 +558,7 @@ const DatasetView: React.FC = () => {
                                     color="blue"
                                     variant="subtle"
                                     onClick={() => {
-                                      setSelectedRecord({ key: field.key, value: field.value });
+                                      setSelectedRecord({ key: fieldKey, value: fieldValue });
                                       setModalOpen(true);
                                     }}
                                   >
@@ -565,22 +567,81 @@ const DatasetView: React.FC = () => {
                                 </Tooltip>
                               </Group>
                             </Group>
-                            <div style={{ paddingLeft: rem(35) }}>
-                              {renderMarkdown ? (
-                                <ReactMarkdown components={customRenderers}>{field.value}</ReactMarkdown>
-                              ) : (
-                                <pre style={preStyles}>
-                                  <Highlight highlight={searchTerms}>{field.value}</Highlight>
-                                </pre>
-                              )}
-                            </div>
-                            {index < getStructuredFields(filteredRecords[0]).length - 1 &&
-                              <Divider my="md" variant="dashed" />}
+                            <pre style={preStyles}>
+                              <Highlight highlight={searchTerms}>{fieldValue}</Highlight>
+                            </pre>
+                            {fieldIndex < getOriginalFields(record).length - 1 && <Divider my="sm" />}
                           </React.Fragment>
                         ))}
-                      </div>
-                    </>
-                  )}
+
+                        {getStructuredFields(record).length > 0 && (
+                          <>
+                            <Divider my="sm" label="Structured Content" labelPosition="center" />
+                            <div style={{ paddingLeft: rem(20) }}>
+                              {getStructuredFields(record).map((field, structuredIndex) => (
+                                <React.Fragment key={structuredIndex}>
+                                  <Group gap="xs" mb="xs">
+                                    <Group gap={4}>
+                                      <Text color="dimmed" size="sm">└─</Text>
+                                      <Badge
+                                        color="pink"
+                                        variant="light"
+                                        style={{ cursor: 'pointer' }}
+                                        onClick={() => {
+                                          setSelectedRecord({ key: field.key, value: field.value });
+                                          setModalOpen(true);
+                                        }}
+                                      >
+                                        {field.key}
+                                      </Badge>
+                                    </Group>
+                                    <Group gap="xs">
+                                      <CopyButton value={field.value} timeout={2000}>
+                                        {({ copied, copy }) => (
+                                          <Tooltip label={copied ? 'Copied' : 'Copy'} withArrow position="right">
+                                            <ActionIcon color={copied ? 'teal' : 'gray'} variant="subtle" onClick={copy}>
+                                              {copied ? (
+                                                <IconCheck style={{ width: rem(16) }} />
+                                              ) : (
+                                                <IconCopy style={{ width: rem(16) }} />
+                                              )}
+                                            </ActionIcon>
+                                          </Tooltip>
+                                        )}
+                                      </CopyButton>
+                                      <Tooltip label="Expand" withArrow position="right">
+                                        <ActionIcon
+                                          color="blue"
+                                          variant="subtle"
+                                          onClick={() => {
+                                            setSelectedRecord({ key: field.key, value: field.value });
+                                            setModalOpen(true);
+                                          }}
+                                        >
+                                          <IconMaximize style={{ width: rem(16) }} />
+                                        </ActionIcon>
+                                      </Tooltip>
+                                    </Group>
+                                  </Group>
+                                  <div style={{ paddingLeft: rem(35) }}>
+                                    {renderMarkdown ? (
+                                      <ReactMarkdown components={customRenderers}>{field.value}</ReactMarkdown>
+                                    ) : (
+                                      <pre style={preStyles}>
+                                        <Highlight highlight={searchTerms}>{field.value}</Highlight>
+                                      </pre>
+                                    )}
+                                  </div>
+                                  {structuredIndex < getStructuredFields(record).length - 1 &&
+                                    <Divider my="sm" variant="dashed" />}
+                                </React.Fragment>
+                              ))}
+                            </div>
+                          </>
+                        )}
+                      </>
+                    );
+                  })()}
                 </>
               ) : (
                 <Text>No records found</Text>
@@ -589,7 +650,47 @@ const DatasetView: React.FC = () => {
           </Card>
         </Grid.Col>
         <Grid.Col span={{ base: 12, md: 4 }}>
-          <AccordionStats />
+          <Card shadow="sm" radius="md" withBorder>
+            <Card.Section withBorder inheritPadding py="xs">
+              <Text fw={500}>Dataset Details</Text>
+            </Card.Section>
+            <Card.Section inheritPadding mt="md" pb="md">
+              {datasetInfo ? (
+                <Stack gap="xs">
+                  <Group justify="space-between">
+                    <Text size="sm" fw={500}>Identifier:</Text>
+                    <Text size="sm">{datasetInfo.identifier}</Text>
+                  </Group>
+                  <Group justify="space-between">
+                    <Text size="sm" fw={500}>Source:</Text>
+                    <Text size="sm">{datasetInfo.source}</Text>
+                  </Group>
+                  <Group justify="space-between">
+                    <Text size="sm" fw={500}>Status:</Text>
+                    <Badge color={datasetInfo.status === 'completed' ? 'green' : 'yellow'} size="sm">
+                      {datasetInfo.status}
+                    </Badge>
+                  </Group>
+                  <Group justify="space-between">
+                    <Text size="sm" fw={500}>Clustering:</Text>
+                    <Badge color={datasetInfo.clustering_status === 'completed' ? 'blue' : datasetInfo.is_clustered ? 'cyan' : 'gray'} size="sm">
+                      {datasetInfo.clustering_status} {datasetInfo.is_clustered ? '(Active)' : ''}
+                    </Badge>
+                  </Group>
+                  <Group justify="space-between">
+                    <Text size="sm" fw={500}>Created:</Text>
+                    <Text size="sm">{new Date(datasetInfo.created_at).toLocaleString()}</Text>
+                  </Group>
+                  <Group justify="space-between">
+                    <Text size="sm" fw={500}>ID:</Text>
+                    <Text size="sm">{datasetInfo.id}</Text>
+                  </Group>
+                </Stack>
+              ) : (
+                <Text size="sm" c="dimmed">Loading details...</Text>
+              )}
+            </Card.Section>
+          </Card>
         </Grid.Col>
       </Grid>
 

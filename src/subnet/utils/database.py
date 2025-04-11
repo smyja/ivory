@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker, Session
 from models import (
     Base,
     DatasetMetadata,
-    DownloadStatus,
+    DownloadStatusEnum,
     DatasetRequest,
     TextDB,
     Category,
@@ -80,7 +80,7 @@ def create_db_engine():
 def get_active_downloads(db: Session):
     active_downloads = (
         db.query(DatasetMetadata)
-        .filter(DatasetMetadata.status == DownloadStatus.IN_PROGRESS)
+        .filter(DatasetMetadata.status == DownloadStatusEnum.IN_PROGRESS.value)
         .all()
     )
 
@@ -88,7 +88,7 @@ def get_active_downloads(db: Session):
         {
             "id": download.id,
             "dataset": download.name,
-            "status": download.status.value,
+            "status": download.status,  # No need for .value here, it's already the string value
             "download_date": download.download_date,
         }
         for download in active_downloads
@@ -421,9 +421,6 @@ except Exception as e:
 
 active_downloads: Dict[int, Dict] = {}
 
-# Global DuckDB connection pool
-_duckdb_connections = []
-
 
 def get_db():
     """Get a database session."""
@@ -434,195 +431,250 @@ def get_db():
         db.close()
 
 
-@contextmanager
-def get_duckdb_connection():
-    """Get a DuckDB connection."""
-    conn = None
-    try:
-        conn = duckdb.connect("datasets.db")
-        yield conn
-    except Exception as e:
-        logger.error(f"Error with DuckDB connection: {str(e)}")
-        raise
-    finally:
-        if conn:
-            try:
-                conn.close()
-            except Exception as e:
-                logger.error(f"Error closing DuckDB connection: {str(e)}")
-                pass
-
-
 BASE_API_URL = "https://datasets-server.huggingface.co/rows"
 
 logger = logging.getLogger(__name__)
 
 
-def download_and_save_dataset(db: Session, request: DatasetRequest):
-    new_metadata = None
-    try:
-        new_metadata = DatasetMetadata(
-            name=request.dataset_name,
-            subset=request.subset,
-            split=request.split,
-            status=DownloadStatus.IN_PROGRESS,
+def download_and_save_dataset(db: Session, dataset_id: int, request: DatasetRequest):
+    """Download dataset based on request, update metadata entry with dataset_id."""
+    dataset_metadata = (
+        db.query(DatasetMetadata).filter(DatasetMetadata.id == dataset_id).first()
+    )
+    if not dataset_metadata:
+        logger.error(
+            f"DatasetMetadata with ID {dataset_id} not found. Cannot proceed with download."
         )
-        db.add(new_metadata)
-        db.commit()
-        db.refresh(new_metadata)
+        # Optionally, handle this error more robustly, e.g., raise an exception
+        # or update some global status
+        return
 
-        if request.num_rows:
-            # Use the API to download a specific number of rows
+    try:
+        # Metadata entry already exists, we just update its status/details
+        logger.info(
+            f"Starting download process for existing dataset ID: {dataset_id}, Name: {dataset_metadata.name}"
+        )
+
+        # --- Download Logic (using request data) ---
+        # ALWAYS use hf_load_dataset for robustness, apply limit later
+        logger.info(
+            f"Loading dataset via datasets library: {request.hf_dataset_name} "
+            f"(Config: {request.hf_config}, Split: {request.hf_split}, Token: {'yes' if request.hf_token else 'no'})"
+        )
+
+        loaded_data = hf_load_dataset(
+            request.hf_dataset_name,
+            name=request.hf_config,
+            split=request.hf_split,  # Can be None to load all splits
+            cache_dir="temp_datasets",
+            token=request.hf_token,  # Pass token here
+        )
+
+        if isinstance(loaded_data, dict):
+            # If split=None, loaded_data is a dict of splits
+            logger.info(f"Loaded DatasetDict with splits: {list(loaded_data.keys())}")
+            all_dfs = []
+            for split_name, dataset_split in loaded_data.items():
+                split_df = dataset_split.to_pandas()
+                split_df["_hf_split"] = split_name  # Add split identifier
+                all_dfs.append(split_df)
+            if not all_dfs:
+                raise ValueError("DatasetDict was empty or contained no valid splits.")
+            df = pd.concat(all_dfs, ignore_index=True)
             logger.info(
-                f"Fetching {request.num_rows} rows via API for dataset: {request.dataset_name}"
+                f"Concatenated {len(all_dfs)} splits into DataFrame with {len(df)} rows."
             )
-
-            config_param = f"&config={request.config}" if request.config else ""
-            api_url = (
-                f"https://datasets-server.huggingface.co/rows?"
-                f"dataset={request.dataset_name}"
-                f"{config_param}"
-                f"&split={request.split}"
-                f"&offset=0"
-                f"&length={min(request.num_rows or 100, 100)}"
-            )
-
-            logger.info(f"Fetching data from URL: {api_url}")
-
-            response = requests.get(api_url)
-            if response.status_code == 404:
-                raise HTTPException(
-                    status_code=404, detail=f"Resource not found: {response.text}"
-                )
-            if response.status_code != 200:
-                raise HTTPException(
-                    status_code=response.status_code,
-                    detail=f"Error fetching dataset: {response.text}",
-                )
-
-            api_data = response.json()
-            rows = api_data["rows"]
-            data = [row["row"] for row in rows]
-            df = pd.DataFrame(data)
-
+        elif loaded_data is not None:  # Check if data was loaded
+            # If specific split requested, loaded_data is a Dataset object
+            logger.info(f"Loaded single Dataset split.")
+            df = loaded_data.to_pandas()
+            # Add split column for consistency, even if only one was loaded
+            df["_hf_split"] = (
+                request.hf_split if request.hf_split else "unknown"
+            )  # Use requested split or mark as unknown
         else:
-            # Use the HF library to download the entire dataset
-            logger.info(f"Loading full dataset directly: {request.dataset_name}")
+            raise ValueError("hf_load_dataset returned None, failed to load data.")
 
-            dataset = hf_load_dataset(
-                request.dataset_name,
-                name=request.subset,
-                split=request.split,
-                cache_dir="temp_datasets",
-            )
-
-            if isinstance(dataset, dict):
-                df = pd.concat(
-                    [split_dataset.to_pandas() for split_dataset in dataset.values()]
+        # --- Apply limit_rows AFTER loading and concatenating ---
+        if request.limit_rows is not None and request.limit_rows > 0:
+            actual_limit = min(request.limit_rows, len(df))
+            if actual_limit < len(df):
+                logger.info(
+                    f"Limiting DataFrame rows from {len(df)} to {actual_limit}."
                 )
+                df = df.iloc[:actual_limit]
             else:
-                df = dataset.to_pandas()
+                logger.info(
+                    f"Row limit ({request.limit_rows}) is >= total rows ({len(df)}), using all rows."
+                )
+        else:
+            logger.info(f"No row limit specified, using all {len(df)} rows.")
 
-        # Save the DataFrame to a Parquet file
-        final_path = os.path.join("datasets", request.dataset_name.replace("/", "_"))
-        if request.subset:
-            final_path = os.path.join(final_path, request.subset)
-        if request.split:
-            final_path = os.path.join(final_path, request.split)
+        # --- Save to Parquet ---
+        # Generate path based on request name, config, and original requested split (or 'all')
+        # This ensures datasets with different splits/configs are saved separately
+        safe_request_name = request.name.replace("/", "_").replace("\\", "_")
+        final_path_parts = ["datasets", safe_request_name]
+        if request.hf_config:
+            final_path_parts.append(request.hf_config.replace("/", "_"))
+        # Use a specific identifier if multiple splits were loaded vs a single requested split
+        split_identifier = (
+            request.hf_split.replace("/", "_") if request.hf_split else "_all_splits_"
+        )
+        final_path_parts.append(split_identifier)
+
+        final_path = os.path.join(*final_path_parts)
 
         os.makedirs(final_path, exist_ok=True)
         parquet_file = os.path.join(final_path, "data.parquet")
         df.to_parquet(parquet_file, index=False)
         logger.info(f"Dataset saved to: {parquet_file}")
 
+        # --- Update Metadata Status (using fetched dataset_metadata object) ---
         if os.path.exists(parquet_file):
             logger.info(f"Verified Parquet file exists in: {final_path}")
-            new_metadata.status = DownloadStatus.COMPLETED
+            dataset_metadata.status = DownloadStatusEnum.COMPLETED.value
+            dataset_metadata.file_path = parquet_file  # Store the final path
+            dataset_metadata.download_date = datetime.now()  # Record download time
+            dataset_metadata.error_message = None  # Clear previous errors
         else:
             logger.error(f"Failed to create Parquet file in: {final_path}")
-            new_metadata.status = DownloadStatus.FAILED
+            dataset_metadata.status = DownloadStatusEnum.FAILED.value
+            dataset_metadata.error_message = (
+                f"Failed to create Parquet file at {parquet_file}"
+            )
 
         db.commit()
-        logger.info(f"Updated dataset status to: {new_metadata.status}")
+        logger.info(
+            f"Updated dataset status to: {dataset_metadata.status} for ID: {dataset_id}"
+        )
 
-        # After df.to_parquet(parquet_file, index=False):
-        logger.info(f"Loading texts from {parquet_file} into TextDB...")
-        df = pd.read_parquet(parquet_file)
-        # Assuming a 'text' column exists (adjust if different)
-        if "text" not in df.columns:
-            logger.error(
-                f"'text' column not found in {parquet_file}. Cannot load texts."
+        # --- Load Texts into TextDB ---
+        if dataset_metadata.status != DownloadStatusEnum.COMPLETED.value:
+            logger.warning(
+                f"Skipping text loading for dataset ID {dataset_id} due to download failure."
             )
-            # Update metadata status to failed?
-            raise ValueError("Missing 'text' column in dataset Parquet file.")
+            return  # Don't proceed if download failed
+
+        logger.info(
+            f"Loading texts from {parquet_file} into TextDB for dataset ID {dataset_id}..."
+        )
+        df = pd.read_parquet(parquet_file)
+
+        # Dynamic text field detection (using hint from request if available)
+        text_field_name = request.text_field  # Use the hint from the request
+        if not text_field_name or text_field_name not in df.columns:
+            logger.warning(
+                f"Text field hint '{request.text_field}' not found or not provided. Attempting auto-detection."
+            )
+            # Auto-detect logic (simplified: use 'text' or first string col)
+            if "text" in df.columns:
+                text_field_name = "text"
+            else:
+                string_cols = df.select_dtypes(include=["object", "string"])
+                if not string_cols.empty:
+                    text_field_name = string_cols.columns[0]
+                    logger.info(f"Auto-detected text field: '{text_field_name}'")
+                else:
+                    text_field_name = None  # Could not find any suitable column
+
+        if not text_field_name:
+            logger.error(
+                f"Could not determine text column in {parquet_file} for dataset ID {dataset_id}. Cannot load texts."
+            )
+            dataset_metadata.status = DownloadStatusEnum.FAILED.value
+            dataset_metadata.error_message = (
+                "Could not identify text column for loading."
+            )
+            db.commit()
+            raise ValueError(
+                "Missing or undetectable text column in dataset Parquet file."
+            )
+
+        logger.info(
+            f"Using text field: '{text_field_name}' for dataset ID {dataset_id}"
+        )
 
         text_records = [
-            {"dataset_id": new_metadata.id, "text": row["text"]}
+            {"dataset_id": dataset_id, "text": row[text_field_name]}
             for _, row in df.iterrows()
-            if pd.notna(row["text"])
+            if pd.notna(row[text_field_name])
         ]  # Handle potential NaNs
 
         if not text_records:
-            logger.warning("No valid text records found in Parquet file.")
-            # Update status?
-            db.commit()  # Commit metadata update even if no texts
-            return  # Or raise error?
+            logger.warning(
+                f"No valid text records found in Parquet file for dataset ID {dataset_id}."
+            )
+            dataset_metadata.total_rows = 0
+            dataset_metadata.status = (
+                DownloadStatusEnum.COMPLETED.value
+            )  # Still completed, just no text
+            dataset_metadata.verification_status = "valid"  # Or maybe 'empty'?
+            db.commit()
+            return
 
         try:
-            logger.info(f"Bulk inserting {len(text_records)} texts...")
-            # Use Core API for RETURNING ID efficiently with DuckDB/SQLite
-            stmt = (
-                TextDB.__table__.insert()
-                .values(text_records)
-                .returning(TextDB.id, TextDB.text)
+            logger.info(
+                f"Bulk inserting {len(text_records)} texts for dataset ID {dataset_id}..."
             )
-            results = db.execute(stmt).fetchall()  # List of (id, text) tuples
+            # Bulk insert without returning IDs if not immediately needed here
+            db.bulk_insert_mappings(TextDB, text_records)
             db.flush()  # Ensure inserts are processed
+            logger.info(f"Successfully inserted texts for dataset ID {dataset_id}.")
 
-            text_content_to_db_id = {text: id for id, text in results}
-            logger.info(f"Successfully inserted texts and created ID map.")
-
-            # --- CRITICAL: Need to store `text_content_to_db_id` ---
-            # This map is needed by `save_clustering_results`.
-            # Options:
-            # 1. Return it from this function (makes signature complex).
-            # 2. Store it temporarily (e.g., Redis, file) - adds complexity.
-            # 3. Re-query TextDB before saving assignments (inefficient for large datasets).
-            # --> Simplest for now might be to pass it around, but needs careful handling in the route.
-
-            new_metadata.total_rows = len(text_records)  # Update total rows
-            new_metadata.status = (
-                "verified"  # Assuming download implies verification for now
+            # Update metadata with final counts and status
+            dataset_metadata.total_rows = len(text_records)
+            dataset_metadata.status = (
+                DownloadStatusEnum.COMPLETED.value
+            )  # Reaffirm completion
+            dataset_metadata.verification_status = (
+                "valid"  # Mark as verified after text load
             )
-            new_metadata.verification_status = "valid"
+            dataset_metadata.error_message = None  # Clear any previous error
             db.commit()
             logger.info(
-                f"Dataset download and text loading complete for {request.name}."
+                f"Dataset download and text loading fully complete for dataset ID {dataset_id}."
             )
-            # Return the map? Or rely on caller to manage it? For now, let's assume caller handles it.
-            # return text_content_to_db_id
 
         except Exception as e_insert:
-            logger.error(f"Failed to bulk insert texts: {e_insert}", exc_info=True)
+            logger.error(
+                f"Failed to bulk insert texts for dataset ID {dataset_id}: {e_insert}",
+                exc_info=True,
+            )
             db.rollback()
-            new_metadata.status = "failed"
-            new_metadata.error_message = f"Failed text insertion: {e_insert}"
+            dataset_metadata.status = DownloadStatusEnum.FAILED.value
+            dataset_metadata.error_message = f"Failed text insertion: {e_insert}"
             db.commit()
-            raise
+            raise  # Re-raise to indicate failure
 
     except Exception as e:
-        logger.error(f"Error downloading dataset: {str(e)}")
-        if new_metadata:
-            new_metadata.status = DownloadStatus.FAILED
-            db.commit()
-        raise e
+        logger.error(
+            f"Error processing dataset ID {dataset_id}: {str(e)}", exc_info=True
+        )
+        if dataset_metadata:  # Check if metadata was fetched successfully
+            dataset_metadata.status = DownloadStatusEnum.FAILED.value
+            dataset_metadata.error_message = f"Download/Processing failed: {str(e)}"
+            try:
+                db.commit()
+            except Exception as e_commit:
+                logger.error(
+                    f"Failed to commit final error status for dataset ID {dataset_id}: {e_commit}"
+                )
+                db.rollback()
+        # Don't raise the exception here if the background task should fail silently
+        # Or re-raise if the failure needs to be propagated
+        # raise e
 
     finally:
         # Clean up temporary files if any
         if os.path.exists("temp_datasets"):
             import shutil
 
-            shutil.rmtree("temp_datasets")
+            try:
+                shutil.rmtree("temp_datasets")
+                logger.info("Cleaned up temp_datasets directory.")
+            except Exception as e_clean:
+                logger.error(f"Error cleaning up temp_datasets: {e_clean}")
 
 
 def verify_and_update_dataset_status(db: Session, dataset_id: int):
@@ -638,7 +690,7 @@ def verify_and_update_dataset_status(db: Session, dataset_id: int):
 
     if not os.path.exists(dataset_path):
         logger.error(f"Dataset directory not found: {dataset_path}")
-        dataset_metadata.status = DownloadStatus.FAILED
+        dataset_metadata.status = DownloadStatusEnum.FAILED
         db.commit()
         return False, f"Dataset directory not found: {dataset_path}"
 
@@ -664,13 +716,13 @@ def verify_and_update_dataset_status(db: Session, dataset_id: int):
             raise ValueError(f"Error reading Parquet file: {str(e)}")
 
         # If we've made it this far, consider the dataset valid
-        dataset_metadata.status = DownloadStatus.COMPLETED
+        dataset_metadata.status = DownloadStatusEnum.COMPLETED
         db.commit()
         logger.info(f"Dataset {dataset_metadata.name} verified successfully")
         return True, "Dataset verified successfully"
 
     except Exception as e:
-        dataset_metadata.status = DownloadStatus.FAILED
+        dataset_metadata.status = DownloadStatusEnum.FAILED
         db.commit()
         error_message = f"Error verifying dataset: {str(e)}"
         logger.error(error_message)

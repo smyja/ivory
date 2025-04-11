@@ -110,7 +110,21 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
         const response = await fetch(`${API_BASE_URL}${API_ENDPOINTS.datasets.huggingface.configs}?dataset_name=${encodeURIComponent(hfDatasetName)}`);
         if (response.ok) {
           const data = await response.json();
-          setConfigs(data.configs || []);
+
+          // Handle both response formats:
+          // 1. Array directly
+          // 2. Object with a 'configs' property containing an array
+          let configsArray: string[] = [];
+
+          if (Array.isArray(data)) {
+            // Case 1: API returned an array directly
+            configsArray = data;
+          } else if (data.configs && Array.isArray(data.configs)) {
+            // Case 2: API returned object with 'configs' property
+            configsArray = data.configs;
+          }
+
+          setConfigs(configsArray);
         } else {
           console.error('Failed to fetch configs');
           setConfigs([]);
@@ -140,17 +154,54 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
         let splitsUrl = `${API_BASE_URL}${API_ENDPOINTS.datasets.huggingface.splits}?dataset_name=${encodeURIComponent(hfDatasetName)}`;
         if (hfConfig) splitsUrl += `&config=${encodeURIComponent(hfConfig)}`;
 
+        console.log('Fetching splits from:', splitsUrl);
         const response = await fetch(splitsUrl);
+
         if (response.ok) {
           const data = await response.json();
-          setSplits(data.splits || []);
+          console.log('Splits API response:', data);
+
+          // Handle both response formats:
+          // 1. Array directly (your API response)
+          // 2. Object with a 'splits' property containing an array (expected format)
+          let splitsArray: string[] = [];
+
+          if (Array.isArray(data)) {
+            // Case 1: API returned an array directly
+            splitsArray = data;
+            console.log('API returned direct array of splits:', splitsArray);
+          } else if (data.splits && Array.isArray(data.splits)) {
+            // Case 2: API returned object with 'splits' property
+            splitsArray = data.splits;
+            console.log('API returned splits property:', splitsArray);
+          }
+
+          if (splitsArray.length > 0) {
+            console.log('Setting splits to:', splitsArray);
+            setSplits(splitsArray);
+          } else {
+            console.warn('No splits found in API response');
+            setSplits([]);
+          }
         } else {
-          console.error('Failed to fetch splits');
+          console.error('Failed to fetch splits, status:', response.status);
+          const errorText = await response.text();
+          console.error('Error response:', errorText);
           setSplits([]);
+          notifications.show({
+            title: 'Error Fetching Splits',
+            message: `Failed to fetch splits for the dataset (Status: ${response.status})`,
+            color: 'red',
+          });
         }
       } catch (error) {
         console.error('Error fetching splits:', error);
         setSplits([]);
+        notifications.show({
+          title: 'Error Fetching Splits',
+          message: 'An unexpected error occurred while fetching splits',
+          color: 'red',
+        });
       } finally {
         setIsLoadingSplits(false);
       }
@@ -249,7 +300,6 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
         };
 
         if (!requestBody.hf_dataset_name) throw new Error("HuggingFace Dataset ID is required.");
-        if (!requestBody.hf_split) throw new Error("HuggingFace Split is required.");
         if (!requestBody.text_field) throw new Error("Text Field is required. Please specify which column contains the text content.");
         if (!allColumnsSelected && (!values.selectedColumns || values.selectedColumns.length === 0)) {
           throw new Error("Please select at least one column to import.");
@@ -262,10 +312,11 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
         }
       }
 
-      const response = await fetch(`${API_BASE_URL}${API_ENDPOINTS.datasets.base}`, {
+      const response = await fetch(`${API_BASE_URL}/datasets/download/`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${values.hfToken}`,
         },
         body: JSON.stringify(requestBody),
       });
@@ -365,7 +416,7 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
                   <Select
                     {...form.getInputProps('hfSplit')}
                     label="Split"
-                    placeholder={isLoadingSplits ? "Loading..." : "Select a split"}
+                    placeholder={isLoadingSplits ? "Loading..." : splits.length > 0 ? "Select a split (optional, defaults to all)" : "No splits available"}
                     data={splits.map(split => ({ value: split, label: split }))}
                     disabled={isLoadingSplits || splits.length === 0}
                     clearable

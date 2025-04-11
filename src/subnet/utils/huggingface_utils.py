@@ -3,7 +3,13 @@ import json
 import logging
 import pandas as pd
 from typing import Dict, List, Optional, Tuple, Any
-from datasets import load_dataset, get_dataset_config_names, get_dataset_split_names
+from datasets import (
+    load_dataset,
+    get_dataset_config_names,
+    get_dataset_split_names,
+    Dataset,
+    DatasetDict,
+)
 import requests
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
@@ -68,16 +74,19 @@ def download_hf_dataset(
 ) -> Tuple[pd.DataFrame, Dict]:
     """
     Download a dataset (or specific columns) from Hugging Face using a specific revision.
+    If 'split' is None, attempts to download and concatenate all available splits.
 
     Returns:
         Tuple of (DataFrame, metadata_dict)
     """
+    log_split = split if split else "all"
     logger.info(
-        f"Downloading {dataset_name} (config={config}, split={split}, revision={revision}, limit={limit_rows}, cols={selected_columns})"
+        f"Downloading {dataset_name} (config={config}, split={log_split}, revision={revision}, limit={limit_rows}, cols={selected_columns})"
     )
 
     try:
-        dataset = load_dataset(
+        # Load dataset - 'split' parameter determines if we get Dataset or DatasetDict
+        loaded_data = load_dataset(
             dataset_name,
             name=config,
             split=split,
@@ -87,61 +96,129 @@ def download_hf_dataset(
             trust_remote_code=True,
         )
 
-        # Get dataset info and features (schema)
-        info = dataset.info
-        features = dataset.features
-        schema_dict = (
-            features.to_dict() if hasattr(features, "to_dict") else str(features)
-        )
+        info = None
+        features = None
+        all_dfs = []
+        total_rows_available = 0
+        splits_loaded = []
 
-        # Handle limiting rows
-        total_rows_available = len(dataset)
-        if limit_rows is not None and limit_rows > 0:
-            logger.info(f"Limiting download to {limit_rows} rows.")
-            actual_limit = min(limit_rows, total_rows_available)
-            if actual_limit < total_rows_available:
-                dataset = dataset.select(range(actual_limit))
-        else:
+        # --- Handle single split vs multiple splits ---
+        if isinstance(loaded_data, DatasetDict):
+            logger.info(f"Loaded DatasetDict with splits: {list(loaded_data.keys())}")
+            # Combine all splits
+            for split_name, dataset_split in loaded_data.items():
+                splits_loaded.append(split_name)
+                if not info:  # Get info/features from the first split
+                    info = dataset_split.info
+                    features = dataset_split.features
+
+                split_rows = len(dataset_split)
+                total_rows_available += split_rows
+                logger.debug(f"Processing split '{split_name}' with {split_rows} rows.")
+                split_df = dataset_split.to_pandas()
+                split_df["_hf_split"] = split_name  # Add split identifier column
+                all_dfs.append(split_df)
+
+            if not all_dfs:
+                raise ValueError("DatasetDict was empty or contained no valid splits.")
+
+            # Concatenate DataFrames from all splits
+            df = pd.concat(all_dfs, ignore_index=True)
             logger.info(
-                f"No row limit specified, downloading all {total_rows_available} rows."
+                f"Concatenated {len(splits_loaded)} splits into single DataFrame with {len(df)} rows (before limit)."
             )
 
-        # Convert the potentially sliced dataset to DataFrame
-        df = dataset.to_pandas()
+        elif isinstance(loaded_data, Dataset):
+            logger.info("Loaded single Dataset split.")
+            # Single split loaded directly
+            splits_loaded.append(split)  # Store the requested split name
+            info = loaded_data.info
+            features = loaded_data.features
+            total_rows_available = len(loaded_data)
+            df = loaded_data.to_pandas()
+            df["_hf_split"] = split  # Add split identifier column
+        else:
+            raise TypeError(
+                f"load_dataset returned unexpected type: {type(loaded_data)}"
+            )
+        # --- End split handling ---
 
-        # Select specific columns if requested
+        schema_dict = (
+            features.to_dict()
+            if features and hasattr(features, "to_dict")
+            else str(features)
+        )
+
+        # Handle limiting rows AFTER combining splits (if applicable)
+        if limit_rows is not None and limit_rows > 0:
+            actual_limit = min(limit_rows, len(df))
+            if actual_limit < len(df):
+                logger.info(
+                    f"Limiting combined DataFrame rows from {len(df)} to {actual_limit}."
+                )
+                df = df.iloc[:actual_limit]
+            else:
+                logger.info(
+                    f"Row limit ({limit_rows}) is >= total rows ({len(df)}), using all rows."
+                )
+        else:
+            logger.info(
+                f"No row limit specified or limit is 0, using all {len(df)} rows."
+            )
+
+        # Select specific columns if requested (after potentially adding _hf_split)
         if selected_columns:
-            # Ensure all requested columns exist, filter out those that don't
-            valid_columns = [col for col in selected_columns if col in df.columns]
-            missing_columns = set(selected_columns) - set(valid_columns)
+            # Ensure _hf_split is included if it exists, if user didn't explicitly select it
+            if "_hf_split" in df.columns and "_hf_split" not in selected_columns:
+                selected_columns_internal = selected_columns + ["_hf_split"]
+            else:
+                selected_columns_internal = selected_columns
+
+            valid_columns = [
+                col for col in selected_columns_internal if col in df.columns
+            ]
+            missing_columns = set(selected_columns_internal) - set(valid_columns)
             if missing_columns:
                 logger.warning(
                     f"Requested columns not found and will be ignored: {missing_columns}"
                 )
             if not valid_columns:
                 raise ValueError("No valid columns selected or found in the dataset.")
-            logger.info(f"Selecting columns: {valid_columns}")
+
+            # Ensure _hf_split is kept if it exists
+            if "_hf_split" in df.columns and "_hf_split" not in valid_columns:
+                valid_columns.append("_hf_split")
+
+            logger.info(f"Selecting final columns: {valid_columns}")
             df = df[valid_columns]
 
-        # Extract schema information based on the FINAL DataFrame (potentially column-filtered)
+        # Extract schema information based on the FINAL DataFrame
+        final_columns = list(df.columns)
         schema_info = {
-            "columns": list(df.columns),
+            "columns": final_columns,
             "column_types": {col: str(dtype) for col, dtype in df.dtypes.items()},
-            "num_rows": len(df),
-            "total_rows_available": total_rows_available,
-            "features": schema_dict,
+            "num_rows": len(df),  # Rows actually in the final DataFrame
+            "total_rows_available": total_rows_available,  # Rows before limiting
+            "features": schema_dict,  # Original HF features dict
+            "splits_loaded": splits_loaded,  # List of splits included
             "revision_used": info.version if info and info.version else revision,
             "description": info.description if info else None,
             "citation": info.citation if info else None,
             "homepage": info.homepage if info else None,
             "license": info.license if info else None,
         }
+        # Ensure _hf_split type is captured if present
+        if "_hf_split" in df.columns:
+            schema_info["column_types"]["_hf_split"] = str(df["_hf_split"].dtype)
 
+        logger.info(
+            f"Returning DataFrame with {len(df)} rows and {len(final_columns)} columns. Splits loaded: {splits_loaded}"
+        )
         return df, schema_info
 
     except Exception as e:
         logger.error(
-            f"Error downloading dataset '{dataset_name}' (revision: {revision}): {e}"
+            f"Error downloading dataset '{dataset_name}' (config: {config}, split: {log_split}, revision: {revision}): {e}"
         )
         raise
 
@@ -194,22 +271,24 @@ def save_dataset_to_parquet(
 ) -> Tuple[str, str]:  # Return paths for parquet and schema
     """
     Save a dataset DataFrame to a Parquet file and its schema to JSON.
+    Adjusts path if 'split' is None (meaning all splits were combined).
 
     Returns:
         Tuple (Path to parquet file, Path to schema file)
     """
     # Create directory structure
-    safe_name = dataset_name.replace("/", "__")  # Use double underscore for safety
+    safe_name = dataset_name.replace("/", "__")
     base_path = os.path.join("datasets", safe_name)
 
     if config:
-        # Sanitize config name as well if needed, though less likely to have slashes
         safe_config = config.replace("/", "__")
         base_path = os.path.join(base_path, safe_config)
 
+    # Only add split directory if a specific split was requested
     if split:
         safe_split = split.replace("/", "__")
         base_path = os.path.join(base_path, safe_split)
+    # If split is None, we save directly under the config (or dataset name) directory
 
     os.makedirs(base_path, exist_ok=True)
 
@@ -222,12 +301,15 @@ def save_dataset_to_parquet(
         logger.error(f"Error saving DataFrame to Parquet at {parquet_path}: {e}")
         raise
 
-    # Save schema information (basic structure)
+    # Save schema information (basic structure reflecting the final DataFrame)
     schema = {
         "columns": list(df.columns),
         "column_types": {col: str(dtype) for col, dtype in df.dtypes.items()},
         "num_rows": len(df),
     }
+    # Ensure _hf_split type is captured if present
+    if "_hf_split" in df.columns:
+        schema["column_types"]["_hf_split"] = str(df["_hf_split"].dtype)
 
     schema_path = os.path.join(base_path, "schema.json")
     try:
