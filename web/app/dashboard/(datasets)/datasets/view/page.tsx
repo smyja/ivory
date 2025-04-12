@@ -120,9 +120,14 @@ const DatasetView: React.FC = () => {
   // Fetch backend page when it changes
   useEffect(() => {
     if (datasetId && !subclusterId && !isInitialLoading) {
-      fetchBackendPage(currentBackendPage);
+      if (currentBackendPage > 1) {
+        console.log(`Backend page changed to ${currentBackendPage}, fetching...`);
+        fetchBackendPage(currentBackendPage);
+      } else {
+        console.log(`Backend page is ${currentBackendPage}, relying on initial load cache.`);
+      }
     }
-  }, [currentBackendPage]);
+  }, [currentBackendPage, datasetId, subclusterId, isInitialLoading]);
 
   // Update displayed records when page changes
   useEffect(() => {
@@ -231,6 +236,14 @@ const DatasetView: React.FC = () => {
   };
 
   const fetchBackendPage = async (backendPage: number) => {
+    if (backendPage < 1) {
+      console.error("Attempted to fetch backend page < 1 (", backendPage, "). Aborting fetch.");
+      setError("Invalid page number requested.");
+      setIsPageLoading(false);
+      return;
+    }
+
+    console.log("Fetching backend page:", backendPage);
     try {
       setIsPageLoading(true);
       const response = await fetch(
@@ -402,14 +415,33 @@ const DatasetView: React.FC = () => {
     },
   };
 
+  // Helper function to safely render any value as a string
+  const safeString = (value: any): string => {
+    if (value === null || value === undefined) {
+      return '';
+    }
+    if (typeof value === 'string') {
+      return value;
+    }
+    if (typeof value === 'object') {
+      try {
+        return JSON.stringify(value);
+      } catch (e) {
+        console.error('Error stringifying object value:', e);
+        return '[Object]';
+      }
+    }
+    return String(value);
+  };
+
   const getStructuredFields = (record: Record) => {
     const fields: { key: string; value: string }[] = [];
     let index = 1;
 
     while (record[`structured_key_${index}`]) {
       fields.push({
-        key: record[`structured_key_${index}`],
-        value: record[`structured_value_${index}`]
+        key: safeString(record[`structured_key_${index}`]),
+        value: safeString(record[`structured_value_${index}`])
       });
       index++;
     }
@@ -418,10 +450,12 @@ const DatasetView: React.FC = () => {
   };
 
   const getOriginalFields = (record: Record) => {
-    return Object.entries(record).filter(([key]) =>
-      !key.startsWith('structured_key_') &&
-      !key.startsWith('structured_value_')
-    );
+    return Object.entries(record)
+      .filter(([key]) =>
+        !key.startsWith('structured_key_') &&
+        !key.startsWith('structured_value_')
+      )
+      .map(([key, value]) => [key, safeString(value)]);
   };
 
   return (

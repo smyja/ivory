@@ -18,9 +18,10 @@ import {
   Pagination,
   Badge,
 } from '@mantine/core';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { IconEye, IconTrash, IconRefresh, IconPlus } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
+import { useDownloads } from '@/components/DownloadNotifications/DownloadContext';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
 
@@ -48,6 +49,28 @@ export default function DatasetsPage() {
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const itemsPerPage = 10;
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const { addDownload } = useDownloads();
+
+  // Handle tracking a newly created dataset from query params
+  useEffect(() => {
+    const trackId = searchParams?.get('track_id');
+    const trackName = searchParams?.get('track_name');
+
+    if (trackId && trackName) {
+      // Add the dataset to our downloads tracker
+      addDownload({
+        id: parseInt(trackId),
+        name: trackName,
+        status: 'pending',
+        message: 'Starting download...'
+      });
+
+      // Remove the tracking params from the URL to avoid readding on refresh
+      const newUrl = window.location.pathname;
+      window.history.replaceState({}, '', newUrl);
+    }
+  }, [searchParams, addDownload]);
 
   const fetchDatasets = async () => {
     try {
@@ -76,28 +99,6 @@ export default function DatasetsPage() {
   const handleView = (datasetId: number) => {
     setViewLoading(datasetId);
     router.push(`/dashboard/datasets/view?id=${datasetId}`);
-  };
-
-  const handleRefresh = async (datasetId: number) => {
-    try {
-      const response = await fetch(`${API_URL}/datasets/${datasetId}/verify`);
-      if (!response.ok) {
-        throw new Error('Failed to verify dataset');
-      }
-      await fetchDatasets(); // Refresh the list after verification
-      notifications.show({
-        title: 'Success',
-        message: 'Dataset verified successfully',
-        color: 'green',
-      });
-    } catch (error) {
-      console.error('Error verifying dataset:', error);
-      notifications.show({
-        title: 'Error',
-        message: 'Failed to verify dataset',
-        color: 'red',
-      });
-    }
   };
 
   const handleDelete = async (datasetId: number) => {
@@ -345,23 +346,6 @@ export default function DatasetsPage() {
                             }}
                           >
                             <IconEye style={{ width: rem(16), height: rem(16) }} />
-                          </ActionIcon>
-                        </Tooltip>
-                        <Tooltip label="Verify Dataset">
-                          <ActionIcon
-                            variant="light"
-                            color="black"
-                            onClick={() => handleRefresh(dataset.id)}
-                            styles={{
-                              root: {
-                                transition: 'background-color 0.2s ease',
-                                '&:hover': {
-                                  backgroundColor: '#f0f0f0',
-                                },
-                              },
-                            }}
-                          >
-                            <IconRefresh style={{ width: rem(16), height: rem(16) }} />
                           </ActionIcon>
                         </Tooltip>
                         <Tooltip label="Cluster Dataset">

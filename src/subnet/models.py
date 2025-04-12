@@ -19,6 +19,8 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from enum import Enum
+import json
+from pydantic import validator
 
 Base = declarative_base()
 
@@ -64,18 +66,17 @@ class DatasetMetadata(Base):
     file_path = Column(String)  # Path where the dataset is stored locally
 
     # New fields for Hugging Face integration
-    hf_dataset_name = Column(
-        String
-    )  # The actual dataset name on HF (e.g., "databricks/databricks-dolly-15k")
-    hf_config = Column(String)  # Dataset configuration name
-    hf_split = Column(String)  # Dataset split (train, test, validation)
-    hf_revision = Column(String)  # Dataset version/revision
+    hf_dataset_name = Column(String)
+    hf_config = Column(String)
+    hf_split = Column(String)
+    hf_revision = Column(String)
 
     # Schema information for flexible datasets
     dataset_schema = Column(String)  # JSON string representing dataset schema
-    field_mappings = Column(
-        String
-    )  # JSON mapping of HF fields to our system (e.g., {"text_field": "content"})
+
+    # Store the list of fields used for the main text input for clustering
+    text_fields = Column(String)  # Store as JSON string list e.g., '["title", "text"]'
+    label_field = Column(String)  # Store the optional label field used
 
     # Relationships
     texts = relationship("TextDB", back_populates="dataset")
@@ -342,7 +343,7 @@ class DatasetRequest(BaseModel):
 
     # Column selection & Field mapping
     selected_columns: Optional[List[str]] = None  # List of columns user wants to import
-    text_field: Optional[str] = None  # Which field contains the text for clustering
+    text_fields: Optional[List[str]] = None  # Add list of text_fields for clustering
     label_field: Optional[str] = (
         None  # Which field contains predefined labels/categories
     )
@@ -398,9 +399,21 @@ class DatasetMetadataResponse(BaseModel):
     total_rows: Optional[int] = None
     error_message: Optional[str] = None
     latest_version: Optional[int] = None  # Add latest successful version
+    text_fields: Optional[List[str]] = (
+        None  # Parse from JSON string in validator if needed
+    )
 
     class Config:
         from_attributes = True
+
+    @validator("text_fields", pre=True, always=True)
+    def parse_text_fields(cls, v):
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                return None  # Or handle error
+        return v
 
 
 # Response model for individual dataset retrieval (potentially including clusters)

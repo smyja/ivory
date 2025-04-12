@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect, useRef } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { z } from 'zod';
 import { useForm, zodResolver } from '@mantine/form';
 import classes from '@styles/global.module.css';
@@ -23,10 +23,12 @@ import {
   MultiSelect,
   Checkbox,
   Alert,
+  Progress,
 } from '@mantine/core';
 import { IconInfoCircle } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import { API_BASE_URL, API_ENDPOINTS } from '@/app/config/api';
+import { useDownloads } from '@/components/DownloadNotifications/DownloadContext';
 
 interface FormValues {
   dataSource: string;
@@ -43,6 +45,7 @@ interface FormValues {
   limitRows: number | undefined;
   hfRevision: string;
   selectedColumns: string[];
+  textFields: string[];
 }
 
 const schema = z.object({
@@ -60,12 +63,15 @@ const schema = z.object({
   limitRows: z.number().optional(),
   hfRevision: z.string().optional(),
   selectedColumns: z.array(z.string()).optional(),
+  textFields: z.array(z.string()).min(1, { message: 'Please select at least one Text Field for clustering' }).optional(),
 });
 
 export default function AuthenticationTitle({ onClose }: { onClose: () => void }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { addDownload } = useDownloads();
 
   // State for dynamic form options
   const [configs, setConfigs] = useState<string[]>([]);
@@ -75,6 +81,10 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
   const [isLoadingConfigs, setIsLoadingConfigs] = useState(false);
   const [isLoadingSplits, setIsLoadingSplits] = useState(false);
   const [isLoadingFeatures, setIsLoadingFeatures] = useState(false);
+
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const [featureOptions, setFeatureOptions] = useState<{ value: string; label: string }[]>([]);
 
   const form = useForm<FormValues>({
     validate: zodResolver(schema),
@@ -93,6 +103,7 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
       limitRows: undefined,
       hfRevision: '',
       selectedColumns: [],
+      textFields: [],
     },
   });
 
@@ -263,6 +274,29 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
     fetchFeatures();
   }, [form.values.hfDatasetName, form.values.hfConfig, form.values.hfToken, allColumnsSelected]);
 
+  // Update feature options when features change
+  useEffect(() => {
+    // The 'features' state variable already holds the columns object from the API response
+    if (features && typeof features === 'object' && Object.keys(features).length > 0) {
+      // Get column names directly from the keys of the 'features' state object
+      const columnNames = Object.keys(features);
+      const options = columnNames.map((colName: string) => ({ value: colName, label: colName }));
+      setFeatureOptions(options);
+      console.log("Updated feature options based on features state:", options);
+    } else {
+      setFeatureOptions([]);
+      // Reset dependent selections if features become invalid
+      form.setFieldValue('textFields', []);
+      form.setFieldValue('labelField', '');
+      form.setFieldValue('selectedColumns', []);
+      // Log why it was reset (could be initial load, empty response, or error)
+      if (features) { // Only log if features isn't undefined/null
+        console.log("Reset feature options because features object was empty or invalid.", features);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [features]); // Keep dependencies, but form is stable
+
   const handleSelectAllChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const checked = event.currentTarget.checked;
     setAllColumnsSelected(checked);
@@ -274,66 +308,131 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
   };
 
   const handleSubmit = async (values: FormValues) => {
-    setIsLoading(true);
-    setError(null);
+    setIsSubmitting(true);
+    const token = 'YOUR_AUTH_TOKEN_HERE';
 
-    try {
-      let requestBody: any = {
-        name: values.datasetName,
-        description: values.description,
-        source: values.dataSource.toLowerCase(),
+    // Determine which columns to actually send (all if checkbox checked)
+    const allColumnsSelected = !features?.columns || (values.selectedColumns && values.selectedColumns.length === features.columns.length);
+
+    let requestBody: any = {
+      name: values.datasetName,
+      description: values.description || undefined,
+      source: values.dataSource,
+      identifier: values.dataSource !== 'HuggingFace' ? values.textFields[0] : values.hfDatasetName,
+    };
+
+    if (values.dataSource === 'HuggingFace') {
+      requestBody = {
+        ...requestBody,
+        hf_dataset_name: values.hfDatasetName,
+        hf_config: values.hfConfig || undefined,
+        hf_split: values.hfSplit || undefined,
+        hf_revision: values.hfRevision || undefined,
+        hf_token: values.hfToken || undefined,
+        text_fields: values.textFields,
+        label_field: values.labelField || undefined,
+        selected_columns: allColumnsSelected ? undefined : values.selectedColumns,
+        limit_rows: values.limitRows,
       };
 
-      if (values.dataSource === 'HuggingFace') {
-        requestBody = {
-          ...requestBody,
-          identifier: values.hfDatasetName,
-          hf_dataset_name: values.hfDatasetName,
-          hf_config: values.hfConfig || undefined,
-          hf_split: values.hfSplit || undefined,
-          hf_revision: values.hfRevision || undefined,
-          hf_token: values.hfToken || undefined,
-          text_field: values.textField || undefined,
-          label_field: values.labelField || undefined,
-          selected_columns: allColumnsSelected ? undefined : values.selectedColumns,
-          limit_rows: values.limitRows,
-        };
-
-        if (!requestBody.hf_dataset_name) throw new Error("HuggingFace Dataset ID is required.");
-        if (!requestBody.text_field) throw new Error("Text Field is required. Please specify which column contains the text content.");
-        if (!allColumnsSelected && (!values.selectedColumns || values.selectedColumns.length === 0)) {
-          throw new Error("Please select at least one column to import.");
-        }
-        if (!allColumnsSelected && values.textField && !values.selectedColumns.includes(values.textField)) {
-          throw new Error("The specified Text Field must be included in the selected columns.");
-        }
-        if (!allColumnsSelected && values.labelField && !values.selectedColumns.includes(values.labelField)) {
-          throw new Error("The specified Label Field must be included in the selected columns.");
-        }
+      // Client-side validation (using Zod automatically handles the textFields check)
+      if (!requestBody.hf_dataset_name) throw new Error("HuggingFace Dataset ID is required.");
+      if (!requestBody.text_fields || requestBody.text_fields.length === 0) throw new Error("Please select at least one Text Field for clustering.");
+      if (!allColumnsSelected && (!values.selectedColumns || values.selectedColumns.length === 0)) {
+        throw new Error("Please select at least one column to import or check 'Select All Columns'.");
       }
+    } else {
+      // Handle URL/Upload specific fields
+      // ... (add validation for URL/Upload if needed)
+    }
 
-      const response = await fetch(`${API_BASE_URL}/datasets/download/`, {
+    try {
+      console.log("Sending dataset creation request:", requestBody);
+
+      // Make the API call to create dataset
+      const response = await fetch(`${API_BASE_URL}${API_ENDPOINTS.datasets.download}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${values.hfToken}`,
+          // Include auth token if authentication is implemented
+          // 'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify(requestBody),
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Failed to create dataset');
+        const errorText = await response.text();
+        console.error('Error response:', errorText);
+        try {
+          const result = JSON.parse(errorText);
+          throw new Error(result.detail || 'Failed to start dataset import');
+        } catch (e) {
+          // If parsing as JSON fails, use the raw text
+          throw new Error(`Error ${response.status}: ${errorText}`);
+        }
       }
 
       const result = await response.json();
-      console.log('Dataset created:', result);
-      router.push('/dashboard/datasets');
+      console.log('Import started:', result);
+
+      // Register the download in our DownloadContext
+      if (result.id) {
+        addDownload({
+          id: result.id,
+          name: values.datasetName,
+          status: 'pending',
+          message: 'Starting download...'
+        });
+
+        // Show a toast notification to alert the user about the download
+        notifications.show({
+          title: 'Dataset Download Started',
+          message: 'You can track progress in the download menu in the header',
+          color: 'blue',
+        });
+
+        // Navigate to datasets list page with tracking info in query params
+        const params = new URLSearchParams({
+          track_id: result.id.toString(),
+          track_name: values.datasetName,
+        });
+        // Use router.push for navigation
+        router.push(`/dashboard/datasets?${params.toString()}`);
+      } else {
+        // Handle case where ID is missing (shouldn't normally happen on success)
+        notifications.show({
+          color: 'yellow',
+          title: 'Warning',
+          message: 'Import started, but could not get ID. Cannot track progress automatically.',
+        });
+        setIsSubmitting(false); // Ensure spinner stops
+      }
+      // NOTE: Do NOT reset the form here, as the navigation will unmount the component anyway.
+      // Do NOT set isSubmitting to false here if navigation happens, let the unmount handle it.
+
     } catch (error: any) {
-      console.error('Failed to create dataset:', error);
-      setError(error.message || 'Failed to create dataset. Please try again.');
+      console.error("Import error:", error);
+      // Check if it's a Zod validation error
+      if (error.errors) {
+        // Handle Zod errors (e.g., display them near fields)
+        // For now, just show a generic notification
+        notifications.show({
+          color: 'red',
+          title: 'Validation Error',
+          message: 'Please check the form fields for errors.',
+        });
+      } else {
+        notifications.show({
+          color: 'red',
+          title: 'Import Error',
+          message: error.message || 'An unexpected error occurred.',
+        });
+      }
+      setIsSubmitting(false); // Stop spinner on error
     } finally {
-      setIsLoading(false);
+      // Only set isSubmitting false if an error occurred *before* navigation
+      // If navigation occurs, the component unmounts, stopping the spinner naturally.
+      // setIsSubmitting(false); <-- Removed from finally
     }
   };
 
@@ -462,19 +561,27 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
                 <Divider my="lg" label="Field Mapping & Limit" labelPosition="center" />
 
                 <SimpleGrid cols={2} spacing="md" verticalSpacing="md">
-                  <TextInput
-                    {...form.getInputProps('textField')}
-                    label="Text Field"
-                    placeholder="Column containing main text content"
-                    description={form.values.textField && !form.values.selectedColumns.includes(form.values.textField) && !allColumnsSelected ? "Warning: Text Field not selected above" : ""}
-                    withAsterisk
+                  <MultiSelect
+                    {...form.getInputProps('textFields')}
+                    label="Text Field(s) for Clustering"
+                    placeholder={isLoadingFeatures ? "Loading features..." : featureOptions.length > 0 ? "Select one or more text columns" : "Load features first"}
+                    data={featureOptions}
+                    disabled={isLoadingFeatures || featureOptions.length === 0}
+                    searchable
+                    clearable
+                    required
+                    mt="md"
+                    error={form.errors.textFields}
                   />
 
-                  <TextInput
+                  <Select
                     {...form.getInputProps('labelField')}
-                    label="Label Field"
-                    placeholder="Optional column containing labels"
-                    description={form.values.labelField && !form.values.selectedColumns.includes(form.values.labelField) && !allColumnsSelected ? "Warning: Label Field not selected above" : ""}
+                    label="Label Field (Optional)"
+                    placeholder={isLoadingFeatures ? "Loading features..." : featureOptions.length > 0 ? "Select a label column" : "Load features first"}
+                    data={featureOptions}
+                    disabled={isLoadingFeatures || featureOptions.length === 0}
+                    clearable
+                    mt="md"
                   />
                 </SimpleGrid>
 
@@ -491,7 +598,7 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
               </>
             )}
 
-            <Button fullWidth mt={30} type="submit" loading={isLoading}>
+            <Button fullWidth mt={30} type="submit" loading={isSubmitting}>
               Create Dataset
             </Button>
 

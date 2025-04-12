@@ -11,14 +11,36 @@ interface Selection {
 }
 
 interface InteractiveRecordModalProps {
-  content: string;
+  content: any; // Change to any to handle any type of content
   onClose: () => void;
 }
+
+// Helper function to safely convert any value to a string
+const safeString = (value: any): string => {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch (e) {
+      console.error('Error stringifying object value:', e);
+      return '[Complex Object]';
+    }
+  }
+  return String(value);
+};
 
 const InteractiveRecordModal: React.FC<InteractiveRecordModalProps> = ({
   content,
   onClose,
 }) => {
+  // Convert content to a safe string at the component level
+  const safeContent = safeString(content);
+
   const [selections, setSelections] = useState<Selection[]>([]);
   const [currentSelection, setCurrentSelection] = useState<{
     text: string;
@@ -125,7 +147,7 @@ const InteractiveRecordModal: React.FC<InteractiveRecordModalProps> = ({
         onMouseUp={handleTextHighlight}
         onTouchEnd={handleTextHighlight}
       >
-        {content}
+        {safeContent}
       </div>
 
       {/* Simplified menu - only "Select as Key" option */}

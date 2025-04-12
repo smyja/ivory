@@ -2,6 +2,8 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Query
 from sqlalchemy.orm import Session
 from typing import List, Dict, Optional
 import logging
+from sse_starlette.sse import EventSourceResponse
+import json
 
 from models import (
     DatasetRequest,
@@ -16,6 +18,12 @@ from utils.database import (
     scan_existing_datasets,
     get_active_downloads,
 )
+from utils.progress_manager import (
+    register_dataset,
+    get_progress_queue,
+    unregister_dataset,
+)
+import asyncio
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -27,7 +35,7 @@ async def create_dataset_endpoint(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
-    """Create a new dataset entry and start the download process."""
+    """Create a new dataset entry, register for progress, and start the download process."""
     try:
         # Check if dataset already exists
         existing_dataset = (
@@ -60,11 +68,18 @@ async def create_dataset_endpoint(
             hf_config=request.hf_config,
             hf_split=request.hf_split,
             hf_revision=request.hf_revision,
+            text_fields=(
+                json.dumps(request.text_fields) if request.text_fields else None
+            ),
+            label_field=request.label_field,
             status=DownloadStatusEnum.IN_PROGRESS.value,
         )
         db.add(new_metadata)
         db.commit()
         db.refresh(new_metadata)
+
+        # Register the dataset for progress reporting
+        await register_dataset(new_metadata.id)
 
         # Start the download in the background, passing the ID and request data
         background_tasks.add_task(
@@ -75,6 +90,8 @@ async def create_dataset_endpoint(
         return result
     except Exception as e:
         logger.error(f"Error creating dataset: {str(e)}")
+        # Potentially unregister if registration happened before error
+        # await unregister_dataset(new_metadata.id) # If needed
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -119,11 +136,18 @@ async def download_dataset(
             hf_config=request.hf_config,
             hf_split=request.hf_split,
             hf_revision=request.hf_revision,
+            text_fields=(
+                json.dumps(request.text_fields) if request.text_fields else None
+            ),
+            label_field=request.label_field,
             status=DownloadStatusEnum.IN_PROGRESS.value,
         )
         db.add(new_metadata)
         db.commit()
         db.refresh(new_metadata)
+
+        # Register the dataset for progress reporting
+        await register_dataset(new_metadata.id)
 
         # Pass the new ID and the request to the background task
         background_tasks.add_task(
@@ -133,24 +157,14 @@ async def download_dataset(
         return {"message": "Download started", "id": new_metadata.id}
     except Exception as e:
         logger.error(f"Error starting dataset download: {str(e)}")
+        # Potentially unregister
+        # await unregister_dataset(new_metadata.id) # If needed
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/active_downloads")
 async def list_active_downloads(db: Session = Depends(get_db)):
     return get_active_downloads(db)
-
-
-@router.get("/{dataset_id}/verify")
-async def verify_dataset(dataset_id: int, db: Session = Depends(get_db)):
-    """Verify the status of a dataset and update it in the database."""
-    try:
-        from utils.database import verify_and_update_dataset_status
-
-        return await verify_and_update_dataset_status(dataset_id, db)
-    except Exception as e:
-        logger.error(f"Error verifying dataset: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/update_status")
@@ -172,3 +186,61 @@ async def update_download_status(
     except Exception as e:
         logger.error(f"Error updating dataset status: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{dataset_id}/stream")
+async def stream_dataset_progress(dataset_id: int):
+    """Endpoint to stream download progress using Server-Sent Events."""
+    queue = await get_progress_queue(dataset_id)
+    if not queue:
+        # If queue doesn't exist, maybe the download finished or never started
+        # Return a simple message or an immediate close event
+        async def _error_generator():
+            yield json.dumps(
+                {
+                    "status": "error",
+                    "message": "Progress tracking not found or already finished.",
+                }
+            )
+
+        # Need EventSourceResponse even for single message to adhere to SSE protocol
+        return EventSourceResponse(_error_generator(), media_type="text/event-stream")
+
+    async def event_generator():
+        try:
+            while True:
+                # Wait for an update from the queue
+                update = await queue.get()
+                logger.debug(f"SSE Stream {dataset_id}: Sending update: {update}")
+                yield json.dumps(update)  # Send update as JSON string
+                queue.task_done()
+
+                # Check for final status to close the stream
+                if update.get("status") in [
+                    DownloadStatusEnum.COMPLETED.value,
+                    DownloadStatusEnum.FAILED.value,
+                ]:
+                    logger.info(
+                        f"SSE Stream {dataset_id}: Received final status '{update.get('status')}'. Closing stream."
+                    )
+                    break  # Exit the loop to close the connection
+        except asyncio.CancelledError:
+            logger.info(f"SSE Stream {dataset_id}: Client disconnected.")
+            # Handle client disconnect if needed
+        except Exception as e:
+            logger.error(
+                f"SSE Stream {dataset_id}: Error in generator: {e}", exc_info=True
+            )
+            # Yield an error message before closing?
+            yield json.dumps(
+                {
+                    "status": "error",
+                    "message": "An internal error occurred during streaming.",
+                }
+            )
+        finally:
+            logger.info(f"SSE Stream {dataset_id}: Generator finished.")
+            # Unregister should happen in download task, but maybe double-check here?
+            # await unregister_dataset(dataset_id)
+
+    return EventSourceResponse(event_generator(), media_type="text/event-stream")

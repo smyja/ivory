@@ -1,9 +1,12 @@
 from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Union
 import logging
 import os
 import pandas as pd
+from pydantic import BaseModel
+import json
 
 from models import (
     DatasetMetadataResponse,
@@ -19,6 +22,56 @@ from utils.database import (
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# --- Pydantic Models for Data Response ---
+
+
+class DatasetDataPagination(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+class DatasetSimpleMetadata(BaseModel):
+    id: int
+    name: str
+    status: str
+
+
+class DatasetData(BaseModel):
+    # Define structure for individual records if known, otherwise use Dict
+    # Using Dict[str, Any] for flexibility as columns can vary
+    pass  # Let FastAPI handle dict serialization for now, assuming basic types
+
+
+class DatasetDataResponse(BaseModel):
+    metadata: DatasetSimpleMetadata
+    data: List[Dict[str, Any]]  # Expecting list of dicts from df.to_dict('records')
+    pagination: DatasetDataPagination
+    columns: List[str]
+    format: str
+    error: Optional[str] = None  # Include optional error field
+
+
+# Response model for basic/full info (can refine later if needed)
+class DatasetInfoResponse(BaseModel):
+    id: int
+    name: str
+    status: Optional[str] = None
+    clustering_status: Optional[str] = None
+    is_clustered: Optional[bool] = None
+    created_at: Optional[Any] = None  # Use Any for datetime for now
+    download_date: Optional[Any] = None
+    message: Optional[str] = None
+    updated_at: Optional[Any] = None
+    source: Optional[str] = None
+    identifier: Optional[str] = None
+    hf_dataset_name: Optional[str] = None
+    hf_config: Optional[str] = None
+    hf_split: Optional[str] = None
+    hf_revision: Optional[str] = None
+    error: Optional[str] = None  # Include optional error field
 
 
 @router.get("/", response_model=List[DatasetMetadataResponse])
@@ -59,7 +112,9 @@ async def list_datasets_endpoint(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{dataset_id}")
+@router.get(
+    "/{dataset_id}", response_model=Union[DatasetDataResponse, DatasetInfoResponse]
+)
 async def get_dataset_info(
     dataset_id: int,
     detail_level: Optional[str] = Query(
@@ -88,194 +143,185 @@ async def get_dataset_info(
                 )
 
             try:
-                # Construct base path using only the dataset name
+                # Construct base path using the dataset name stored in metadata
                 dataset_name = dataset_metadata.name
-                if dataset_metadata.hf_dataset_name:
-                    dataset_name = dataset_metadata.hf_dataset_name
+                safe_name = dataset_name.replace("/", "_").replace("\\", "_")
+                base_dataset_path = os.path.join("datasets", safe_name)
 
-                # Replace slashes in the dataset name with underscores
-                safe_name = dataset_name.replace("/", "_")
-                dataset_path = os.path.join("datasets", safe_name)
+                # --- Determine the specific sub-path based on stored metadata --- #
+                path_parts = [base_dataset_path]
 
-                # Make sure the path exists
-                if not os.path.exists(dataset_path):
-                    logger.warning(f"Dataset directory not found: {dataset_path}")
-                    return {
-                        "error": "Dataset files not available",
-                        "metadata": {
-                            "id": dataset_metadata.id,
-                            "name": dataset_metadata.name,
-                            "status": dataset_metadata.status,
-                        },
-                        "pagination": {
-                            "total": 0,
-                            "page": 1,
-                            "page_size": page_size,
-                            "total_pages": 0,
-                        },
-                        "data": [],
-                        "columns": [],
-                    }
-
-                # Find splits by listing directories in the dataset path
-                available_splits = [
-                    d
-                    for d in os.listdir(dataset_path)
-                    if os.path.isdir(os.path.join(dataset_path, d))
-                ]
-
-                if not available_splits:
-                    logger.warning(
-                        f"No splits found in dataset directory: {dataset_path}"
-                    )
-                    return {
-                        "error": "No dataset splits available",
-                        "metadata": {
-                            "id": dataset_metadata.id,
-                            "name": dataset_metadata.name,
-                            "status": dataset_metadata.status,
-                        },
-                        "pagination": {
-                            "total": 0,
-                            "page": 1,
-                            "page_size": page_size,
-                            "total_pages": 0,
-                        },
-                        "data": [],
-                        "columns": [],
-                    }
-
-                # Use the first available split or the hf_split if specified
-                split = available_splits[0]
-                if hasattr(dataset_metadata, "hf_split") and dataset_metadata.hf_split:
-                    if dataset_metadata.hf_split in available_splits:
-                        split = dataset_metadata.hf_split
-
-                split_path = os.path.join(dataset_path, split)
-
-                # Check for data files - prioritize Parquet
-                parquet_path = os.path.join(split_path, "data.parquet")
-
-                if os.path.exists(parquet_path):
-                    # Use Parquet file directly - this is our preferred format
-                    df = pd.read_parquet(parquet_path)
-
-                    # Get column names
-                    column_names = df.columns.tolist()
-
-                    # Calculate total count
-                    total_count = len(df)
-
-                    # Get paginated data
-                    offset = (page - 1) * page_size
-                    end_idx = min(offset + page_size, total_count)
-                    paginated_df = df.iloc[offset:end_idx]
-
-                    # Convert to list of dicts
-                    result_data = paginated_df.to_dict(orient="records")
-                    file_format = "parquet"
-
+                # Use stored config if available
+                config_part = None
+                if (
+                    hasattr(dataset_metadata, "hf_config")
+                    and dataset_metadata.hf_config
+                ):
+                    config_part = dataset_metadata.hf_config.replace("/", "_")
+                    path_parts.append(config_part)
                 else:
-                    logger.warning(f"Parquet data file not found at {parquet_path}")
-                    return {
-                        "error": "Dataset file not found",
-                        "metadata": {
-                            "id": dataset_metadata.id,
-                            "name": dataset_metadata.name,
-                            "status": dataset_metadata.status,
-                            "path": parquet_path,
-                        },
-                        "pagination": {
-                            "total": 0,
-                            "page": 1,
-                            "page_size": page_size,
-                            "total_pages": 0,
-                        },
-                        "data": [],
-                        "columns": [],
-                    }
+                    # Attempt to find a default or first config directory if not stored
+                    # This might be needed for datasets not imported via HF flow
+                    if os.path.exists(base_dataset_path):
+                        potential_configs = [
+                            d
+                            for d in os.listdir(base_dataset_path)
+                            if os.path.isdir(os.path.join(base_dataset_path, d))
+                            and d != "_all_splits_"
+                        ]  # Exclude the split marker
+                        if potential_configs:  # Check if list is not empty
+                            config_part = potential_configs[
+                                0
+                            ]  # Take the first found dir as config
+                            path_parts.append(config_part)
+                        # If no config dirs, maybe data is directly under base_dataset_path/_all_splits_ ?
+
+                # Use stored split if available, otherwise default to _all_splits_
+                split_part = "_all_splits_"  # Default
+                if hasattr(dataset_metadata, "hf_split") and dataset_metadata.hf_split:
+                    split_part = dataset_metadata.hf_split.replace("/", "_")
+                elif os.path.exists(os.path.join(*path_parts, "_all_splits_")):
+                    # Keep the default if _all_splits_ exists
+                    pass
+                elif os.path.exists(base_dataset_path):  # Check base path again
+                    # If specific split wasn't stored and _all_splits_ doesn't exist,
+                    # try to find the first actual split directory
+                    config_path_to_check = os.path.join(
+                        *path_parts
+                    )  # Path including potential config
+                    if os.path.exists(config_path_to_check):
+                        potential_splits = [
+                            d
+                            for d in os.listdir(config_path_to_check)
+                            if os.path.isdir(os.path.join(config_path_to_check, d))
+                        ]
+                        if potential_splits:  # Check if list is not empty
+                            split_part = potential_splits[0]
+
+                path_parts.append(split_part)
+
+                # Final path to the directory containing data.parquet
+                final_data_dir = os.path.join(*path_parts)
+
+                logger.info(f"Attempting to load data from directory: {final_data_dir}")
+
+                parquet_path = os.path.join(final_data_dir, "data.parquet")
+
+                if not os.path.exists(parquet_path):
+                    logger.warning(
+                        f"Parquet data file not found at calculated path: {parquet_path}"
+                    )
+                    # Also log the base path tried for context
+                    logger.warning(f"Base dataset path checked: {base_dataset_path}")
+                    return DatasetDataResponse(
+                        error="Dataset Parquet file not found at expected location.",
+                        metadata=DatasetSimpleMetadata(
+                            id=dataset_metadata.id,
+                            name=dataset_metadata.name,
+                            status=dataset_metadata.status,
+                        ),
+                        pagination=DatasetDataPagination(
+                            total=0, page=page, page_size=page_size, total_pages=0
+                        ),
+                        data=[],
+                        columns=[],
+                        format="unknown",
+                    )
+
+                # Use Parquet file directly
+                df = pd.read_parquet(parquet_path)
+
+                # Get column names
+                column_names = df.columns.tolist()
+
+                # Calculate total count
+                total_count = len(df)
+
+                # Get paginated data
+                offset = (page - 1) * page_size
+                end_idx = min(offset + page_size, total_count)
+                paginated_df = df.iloc[offset:end_idx]
+
+                # Convert to serializable format using pandas json methods
+                # This handles numpy types and other complex objects better than direct dict conversion
+                result_data = json.loads(
+                    paginated_df.to_json(orient="records", date_format="iso")
+                )
 
                 # Return data with pagination info
-                return {
-                    "metadata": {
-                        "id": dataset_metadata.id,
-                        "name": dataset_metadata.name,
-                        "status": dataset_metadata.status,
-                    },
-                    "data": result_data,
-                    "pagination": {
-                        "total": total_count,
-                        "page": page,
-                        "page_size": page_size,
-                        "total_pages": (total_count + page_size - 1) // page_size,
-                    },
-                    "columns": column_names,
-                    "format": file_format,
-                }
+                return DatasetDataResponse(
+                    metadata=DatasetSimpleMetadata(
+                        id=dataset_metadata.id,
+                        name=dataset_metadata.name,
+                        status=dataset_metadata.status,
+                    ),
+                    data=result_data,
+                    pagination=DatasetDataPagination(
+                        total=total_count,
+                        page=page,
+                        page_size=page_size,
+                        total_pages=(total_count + page_size - 1) // page_size,
+                    ),
+                    columns=column_names,
+                    format="parquet",
+                )
 
             except Exception as e:
-                logger.error(f"Error accessing dataset data: {str(e)}")
-                return {
-                    "error": str(e),
-                    "metadata": {
-                        "id": dataset_metadata.id,
-                        "name": dataset_metadata.name,
-                        "status": dataset_metadata.status,
-                    },
-                    "pagination": {
-                        "total": 0,
-                        "page": 1,
-                        "page_size": page_size,
-                        "total_pages": 0,
-                    },
-                    "data": [],
-                    "columns": [],
-                }
+                logger.error(f"Error accessing dataset data: {str(e)}", exc_info=True)
+                return DatasetDataResponse(
+                    error=str(e),
+                    metadata=DatasetSimpleMetadata(
+                        id=dataset_metadata.id,
+                        name=dataset_metadata.name,
+                        status=dataset_metadata.status,
+                    ),
+                    pagination=DatasetDataPagination(
+                        total=0, page=page, page_size=page_size, total_pages=0
+                    ),
+                    data=[],
+                    columns=[],
+                    format="unknown",
+                )
 
-        # For basic or full detail level
-        result = {"id": dataset_metadata.id, "name": dataset_metadata.name}
-
+        # For basic or full detail level - return structure matching DatasetInfoResponse
+        # Need to reconstruct the 'result' dict carefully to match the model
+        info_response_data = {
+            "id": dataset_metadata.id,
+            "name": dataset_metadata.name,
+            "status": dataset_metadata.status,
+            "clustering_status": dataset_metadata.clustering_status,
+            "is_clustered": dataset_metadata.is_clustered,
+            "created_at": dataset_metadata.created_at,
+        }
         if detail_level == "full":
-            # Add more detailed info with safe attribute access
-            # First build a base dict with all safe fields
-            base_fields = {
-                "status": dataset_metadata.status,
-                "clustering_status": dataset_metadata.clustering_status,
-                "is_clustered": dataset_metadata.is_clustered,
-                "created_at": dataset_metadata.created_at,
-            }
-
-            # Carefully add optional fields with hasattr checks
-            optional_fields = {}
+            # Add optional fields safely
             for field in [
                 "download_date",
                 "message",
                 "updated_at",
                 "source",
                 "identifier",
+                "hf_dataset_name",
+                "hf_config",
+                "hf_split",
+                "hf_revision",
             ]:
                 if hasattr(dataset_metadata, field):
-                    optional_fields[field] = getattr(dataset_metadata, field)
+                    value = getattr(dataset_metadata, field)
+                    if value is not None:  # Add only if not None
+                        info_response_data[field] = value
 
-            # Update the result with both mandatory and optional fields
-            result.update(base_fields)
-            result.update(optional_fields)
+        # Validate and return using the Pydantic model
+        return DatasetInfoResponse(**info_response_data)
 
-            # Add HF specific fields if they exist
-            hf_fields = {}
-            for field in ["hf_dataset_name", "hf_config", "hf_split", "hf_revision"]:
-                if hasattr(dataset_metadata, field) and getattr(
-                    dataset_metadata, field
-                ):
-                    hf_fields[field] = getattr(dataset_metadata, field)
-
-            if hf_fields:
-                result.update(hf_fields)
-
-        return result
+    except HTTPException as http_exc:
+        raise http_exc  # Re-raise FastAPI/manual HTTP exceptions
     except Exception as e:
-        logger.error(f"Error getting dataset info: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(
+            f"Error getting dataset info for ID {dataset_id}: {str(e)}", exc_info=True
+        )
+        # Return a generic error using one of the response models (e.g., DatasetInfoResponse)
+        return DatasetInfoResponse(id=dataset_id, name="Error", error=str(e))
 
 
 @router.get("/{dataset_id}/status")
@@ -314,13 +360,26 @@ async def get_dataset_status(
             }
         else:
             # Get general status (download status)
-            return {
+            status_info = {
                 "status": dataset.status,
-                "message": dataset.message,
-                "download_date": dataset.download_date,
-                "is_clustered": dataset.is_clustered,
-                "clustering_status": dataset.clustering_status,
             }
+
+            # Safely add all optional attributes with hasattr checks
+            for field in [
+                "download_date",
+                "is_clustered",
+                "clustering_status",
+                "message",
+                "error_message",
+            ]:
+                if hasattr(dataset, field):
+                    value = getattr(dataset, field)
+                    if value is not None:
+                        # Use the field name as is, except for error_message which maps to message
+                        key = "message" if field == "error_message" else field
+                        status_info[key] = value
+
+            return status_info
     except Exception as e:
         logger.error(f"Error getting dataset status: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

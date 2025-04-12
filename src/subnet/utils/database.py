@@ -1,6 +1,5 @@
 ### utils/database.py
 import os
-import requests
 from sqlalchemy import create_engine, MetaData, text
 from sqlalchemy.orm import sessionmaker, Session
 from models import (
@@ -12,9 +11,7 @@ from models import (
     Category,
     Level1Cluster,
     TextAssignment,
-    ClusteringHistory,
 )
-from huggingface_hub import hf_hub_download
 from datasets import load_dataset as hf_load_dataset
 import pandas as pd
 from typing import Dict, List, Any, Optional, Tuple
@@ -24,23 +21,16 @@ import duckdb
 from contextlib import contextmanager
 import time
 from datetime import datetime
+from .progress_manager import report_progress, unregister_dataset
+import asyncio
+import json
 
-# Import sequences if needed elsewhere, though Base.metadata should handle creation
-from models import (
-    dataset_id_seq,
-    text_id_seq,
-    category_id_seq,
-    l1_cluster_id_seq,
-    assignment_id_seq,
-    history_id_seq,
-)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Use a single DuckDB connection method
 SQLALCHEMY_DATABASE_URL = "duckdb:///datasets.db"
-
 
 def create_db_engine():
     """Create a SQLAlchemy engine with retries for database initialization."""
@@ -379,10 +369,6 @@ def init_db():
                 "Database schema initialized successfully using SQLAlchemy models."
             )
 
-            # Initial scan might still be useful
-            # with SessionLocal() as db:
-            #    scan_existing_datasets(db)
-
             return  # Success
         except Exception as e:
             logger.error(
@@ -436,8 +422,10 @@ BASE_API_URL = "https://datasets-server.huggingface.co/rows"
 logger = logging.getLogger(__name__)
 
 
-def download_and_save_dataset(db: Session, dataset_id: int, request: DatasetRequest):
-    """Download dataset based on request, update metadata entry with dataset_id."""
+async def download_and_save_dataset(
+    db: Session, dataset_id: int, request: DatasetRequest
+):
+    """Download dataset, concatenate specified text fields, update metadata."""
     dataset_metadata = (
         db.query(DatasetMetadata).filter(DatasetMetadata.id == dataset_id).first()
     )
@@ -445,11 +433,21 @@ def download_and_save_dataset(db: Session, dataset_id: int, request: DatasetRequ
         logger.error(
             f"DatasetMetadata with ID {dataset_id} not found. Cannot proceed with download."
         )
-        # Optionally, handle this error more robustly, e.g., raise an exception
-        # or update some global status
+        await report_progress(
+            dataset_id,
+            status=DownloadStatusEnum.FAILED.value,
+            message="Dataset metadata not found.",
+        )
+        await unregister_dataset(dataset_id)
         return
 
     try:
+        await report_progress(
+            dataset_id,
+            status=DownloadStatusEnum.IN_PROGRESS.value,
+            message="Starting download...",
+        )
+
         # Metadata entry already exists, we just update its status/details
         logger.info(
             f"Starting download process for existing dataset ID: {dataset_id}, Name: {dataset_metadata.name}"
@@ -461,13 +459,27 @@ def download_and_save_dataset(db: Session, dataset_id: int, request: DatasetRequ
             f"Loading dataset via datasets library: {request.hf_dataset_name} "
             f"(Config: {request.hf_config}, Split: {request.hf_split}, Token: {'yes' if request.hf_token else 'no'})"
         )
+        # Report download start
+        await report_progress(
+            dataset_id,
+            status=DownloadStatusEnum.IN_PROGRESS.value,
+            message=f"Downloading {request.hf_dataset_name}...",
+        )
 
+        # NOTE: hf_load_dataset doesn't have a direct progress callback.
+        # Progress reporting here will be coarse (Started -> Downloaded/Failed -> Saved -> Loaded Texts)
         loaded_data = hf_load_dataset(
             request.hf_dataset_name,
             name=request.hf_config,
             split=request.hf_split,  # Can be None to load all splits
             cache_dir="temp_datasets",
             token=request.hf_token,  # Pass token here
+        )
+
+        await report_progress(
+            dataset_id,
+            status=DownloadStatusEnum.IN_PROGRESS.value,
+            message="Processing data...",
         )
 
         if isinstance(loaded_data, dict):
@@ -510,7 +522,12 @@ def download_and_save_dataset(db: Session, dataset_id: int, request: DatasetRequ
         else:
             logger.info(f"No row limit specified, using all {len(df)} rows.")
 
-        # --- Save to Parquet ---
+        # --- Save to Parquet (Original data) ---
+        await report_progress(
+            dataset_id,
+            status=DownloadStatusEnum.IN_PROGRESS.value,
+            message="Saving original data...",
+        )
         # Generate path based on request name, config, and original requested split (or 'all')
         # This ensures datasets with different splits/configs are saved separately
         safe_request_name = request.name.replace("/", "_").replace("\\", "_")
@@ -528,132 +545,176 @@ def download_and_save_dataset(db: Session, dataset_id: int, request: DatasetRequ
         os.makedirs(final_path, exist_ok=True)
         parquet_file = os.path.join(final_path, "data.parquet")
         df.to_parquet(parquet_file, index=False)
-        logger.info(f"Dataset saved to: {parquet_file}")
+        logger.info(f"Original dataset saved to: {parquet_file}")
 
-        # --- Update Metadata Status (using fetched dataset_metadata object) ---
+        # --- Update Metadata Status (Part 1 - Download Complete) ---
         if os.path.exists(parquet_file):
-            logger.info(f"Verified Parquet file exists in: {final_path}")
             dataset_metadata.status = DownloadStatusEnum.COMPLETED.value
-            dataset_metadata.file_path = parquet_file  # Store the final path
-            dataset_metadata.download_date = datetime.now()  # Record download time
-            dataset_metadata.error_message = None  # Clear previous errors
+            dataset_metadata.file_path = parquet_file
+            dataset_metadata.download_date = datetime.now()
+            dataset_metadata.error_message = None
+            # Also store the selected text_fields JSON if not already done by endpoint
+            if not dataset_metadata.text_fields and request.text_fields:
+                dataset_metadata.text_fields = json.dumps(request.text_fields)
+            # Store label field
+            if request.label_field:
+                dataset_metadata.label_field = request.label_field
+            db.commit()
         else:
             logger.error(f"Failed to create Parquet file in: {final_path}")
             dataset_metadata.status = DownloadStatusEnum.FAILED.value
             dataset_metadata.error_message = (
                 f"Failed to create Parquet file at {parquet_file}"
             )
+            await report_progress(
+                dataset_id,
+                status=DownloadStatusEnum.FAILED.value,
+                message=dataset_metadata.error_message,
+            )
+            await unregister_dataset(dataset_id)
+            return
 
-        db.commit()
-        logger.info(
-            f"Updated dataset status to: {dataset_metadata.status} for ID: {dataset_id}"
+        # --- CONCATENATE TEXT FIELDS --- #
+        await report_progress(
+            dataset_id,
+            status=DownloadStatusEnum.IN_PROGRESS.value,
+            message="Processing text fields...",
         )
 
-        # --- Load Texts into TextDB ---
-        if dataset_metadata.status != DownloadStatusEnum.COMPLETED.value:
-            logger.warning(
-                f"Skipping text loading for dataset ID {dataset_id} due to download failure."
-            )
-            return  # Don't proceed if download failed
-
-        logger.info(
-            f"Loading texts from {parquet_file} into TextDB for dataset ID {dataset_id}..."
-        )
-        df = pd.read_parquet(parquet_file)
-
-        # Dynamic text field detection (using hint from request if available)
-        text_field_name = request.text_field  # Use the hint from the request
-        if not text_field_name or text_field_name not in df.columns:
-            logger.warning(
-                f"Text field hint '{request.text_field}' not found or not provided. Attempting auto-detection."
-            )
-            # Auto-detect logic (simplified: use 'text' or first string col)
-            if "text" in df.columns:
-                text_field_name = "text"
-            else:
-                string_cols = df.select_dtypes(include=["object", "string"])
-                if not string_cols.empty:
-                    text_field_name = string_cols.columns[0]
-                    logger.info(f"Auto-detected text field: '{text_field_name}'")
-                else:
-                    text_field_name = None  # Could not find any suitable column
-
-        if not text_field_name:
+        if not request.text_fields:
             logger.error(
-                f"Could not determine text column in {parquet_file} for dataset ID {dataset_id}. Cannot load texts."
+                f"No text_fields specified in request for dataset ID {dataset_id}. Cannot proceed."
             )
-            dataset_metadata.status = DownloadStatusEnum.FAILED.value
-            dataset_metadata.error_message = (
-                "Could not identify text column for loading."
+            raise ValueError("Text fields for concatenation were not provided.")
+
+        # Validate that specified text fields exist in the DataFrame
+        missing_fields = [
+            field for field in request.text_fields if field not in df.columns
+        ]
+        if missing_fields:
+            logger.error(
+                f"Specified text_fields not found in DataFrame: {missing_fields} for dataset ID {dataset_id}"
             )
-            db.commit()
-            raise ValueError(
-                "Missing or undetectable text column in dataset Parquet file."
-            )
+            raise ValueError(f"Specified text fields not found: {missing_fields}")
 
         logger.info(
-            f"Using text field: '{text_field_name}' for dataset ID {dataset_id}"
+            f"Concatenating text from columns: {request.text_fields} for dataset ID {dataset_id}"
         )
 
+        # Define a separator (adjust if needed)
+        separator = " \n\n "  # Use newline separation, for example
+
+        # Create the concatenated text column
+        # Convert selected columns to string type before concatenation to handle potential non-string data
+        df["__concatenated_text__"] = (
+            df[request.text_fields].astype(str).agg(separator.join, axis=1)
+        )
+
+        # --- De-duplicate and Load Concatenated Texts into TextDB ---
+        await report_progress(
+            dataset_id,
+            status=DownloadStatusEnum.IN_PROGRESS.value,
+            message="Loading processed text into database...",
+        )
+
+        # De-duplicate based on the new concatenated text column
+        unique_concatenated_texts = df["__concatenated_text__"].dropna().unique()
+        logger.info(
+            f"Found {len(unique_concatenated_texts)} unique concatenated texts out of {len(df)} total rows."
+        )
+
+        # Create records for insertion using the concatenated text
         text_records = [
-            {"dataset_id": dataset_id, "text": row[text_field_name]}
-            for _, row in df.iterrows()
-            if pd.notna(row[text_field_name])
-        ]  # Handle potential NaNs
+            {"dataset_id": dataset_id, "text": text}
+            for text in unique_concatenated_texts
+        ]
+
+        # Filter out empty strings
+        original_count = len(text_records)
+        text_records = [
+            record
+            for record in text_records
+            if record["text"] and str(record["text"]).strip()
+        ]
+        if len(text_records) < original_count:
+            logger.warning(
+                f"Removed {original_count - len(text_records)} empty or whitespace-only concatenated texts."
+            )
 
         if not text_records:
             logger.warning(
-                f"No valid text records found in Parquet file for dataset ID {dataset_id}."
+                f"No valid, non-empty unique concatenated text records found for dataset ID {dataset_id}."
             )
             dataset_metadata.total_rows = 0
-            dataset_metadata.status = (
-                DownloadStatusEnum.COMPLETED.value
-            )  # Still completed, just no text
-            dataset_metadata.verification_status = "valid"  # Or maybe 'empty'?
+            dataset_metadata.status = DownloadStatusEnum.COMPLETED.value
+            dataset_metadata.verification_status = "valid"
+            dataset_metadata.error_message = (
+                "No text data resulted after concatenation and filtering."
+            )
             db.commit()
+            await report_progress(
+                dataset_id,
+                status=DownloadStatusEnum.COMPLETED.value,
+                message="No text data resulted after processing.",
+                data={"final_status": dataset_metadata.status},
+            )
+            await unregister_dataset(dataset_id)
             return
 
         try:
             logger.info(
-                f"Bulk inserting {len(text_records)} texts for dataset ID {dataset_id}..."
+                f"Bulk inserting {len(text_records)} concatenated texts for dataset ID {dataset_id}..."
             )
-            # Bulk insert without returning IDs if not immediately needed here
             db.bulk_insert_mappings(TextDB, text_records)
-            db.flush()  # Ensure inserts are processed
-            logger.info(f"Successfully inserted texts for dataset ID {dataset_id}.")
+            db.flush()
+            logger.info(
+                f"Successfully inserted concatenated texts for dataset ID {dataset_id}."
+            )
 
             # Update metadata with final counts and status
             dataset_metadata.total_rows = len(text_records)
-            dataset_metadata.status = (
-                DownloadStatusEnum.COMPLETED.value
-            )  # Reaffirm completion
-            dataset_metadata.verification_status = (
-                "valid"  # Mark as verified after text load
-            )
-            dataset_metadata.error_message = None  # Clear any previous error
+            dataset_metadata.status = DownloadStatusEnum.COMPLETED.value
+            dataset_metadata.verification_status = "valid"
+            dataset_metadata.error_message = None
             db.commit()
             logger.info(
-                f"Dataset download and text loading fully complete for dataset ID {dataset_id}."
+                f"Dataset download and concatenated text loading fully complete for dataset ID {dataset_id}."
+            )
+            await report_progress(
+                dataset_id,
+                status=DownloadStatusEnum.COMPLETED.value,
+                message="Dataset ready.",
+                data={"final_status": dataset_metadata.status},
             )
 
         except Exception as e_insert:
             logger.error(
-                f"Failed to bulk insert texts for dataset ID {dataset_id}: {e_insert}",
+                f"Failed to bulk insert concatenated texts for dataset ID {dataset_id}: {e_insert}",
                 exc_info=True,
             )
             db.rollback()
             dataset_metadata.status = DownloadStatusEnum.FAILED.value
-            dataset_metadata.error_message = f"Failed text insertion: {e_insert}"
+            dataset_metadata.error_message = (
+                f"Failed concatenated text insertion: {e_insert}"
+            )
             db.commit()
-            raise  # Re-raise to indicate failure
+            await report_progress(
+                dataset_id,
+                status=DownloadStatusEnum.FAILED.value,
+                message=f"Failed text insertion: {e_insert}",
+                data={"final_status": dataset_metadata.status},
+            )
+            await unregister_dataset(dataset_id)
+            raise
 
     except Exception as e:
+        error_msg = f"Download/Processing failed: {str(e)}"
         logger.error(
-            f"Error processing dataset ID {dataset_id}: {str(e)}", exc_info=True
+            f"Error processing dataset ID {dataset_id}: {error_msg}", exc_info=True
         )
         if dataset_metadata:  # Check if metadata was fetched successfully
             dataset_metadata.status = DownloadStatusEnum.FAILED.value
-            dataset_metadata.error_message = f"Download/Processing failed: {str(e)}"
+            dataset_metadata.error_message = error_msg
             try:
                 db.commit()
             except Exception as e_commit:
@@ -661,11 +722,23 @@ def download_and_save_dataset(db: Session, dataset_id: int, request: DatasetRequ
                     f"Failed to commit final error status for dataset ID {dataset_id}: {e_commit}"
                 )
                 db.rollback()
-        # Don't raise the exception here if the background task should fail silently
-        # Or re-raise if the failure needs to be propagated
-        # raise e
+        # Report failure
+        await report_progress(
+            dataset_id,
+            status=DownloadStatusEnum.FAILED.value,
+            message=error_msg,
+            data={
+                "final_status": (
+                    dataset_metadata.status if dataset_metadata else "unknown"
+                )
+            },
+        )
+        await unregister_dataset(dataset_id)
 
     finally:
+        # Ensure dataset is unregistered even if something unexpected happens
+        # Although completion/failure cases should handle it
+        await unregister_dataset(dataset_id)
         # Clean up temporary files if any
         if os.path.exists("temp_datasets"):
             import shutil
@@ -676,61 +749,7 @@ def download_and_save_dataset(db: Session, dataset_id: int, request: DatasetRequ
             except Exception as e_clean:
                 logger.error(f"Error cleaning up temp_datasets: {e_clean}")
 
-
-def verify_and_update_dataset_status(db: Session, dataset_id: int):
-    dataset_metadata = (
-        db.query(DatasetMetadata).filter(DatasetMetadata.id == dataset_id).first()
-    )
-    if not dataset_metadata:
-        logger.error(f"Dataset with id {dataset_id} not found in database")
-        return False, "Dataset not found in database"
-
-    dataset_path = os.path.join("datasets", dataset_metadata.name.replace("/", "_"))
-    logger.info(f"Verifying dataset at path: {dataset_path}")
-
-    if not os.path.exists(dataset_path):
-        logger.error(f"Dataset directory not found: {dataset_path}")
-        dataset_metadata.status = DownloadStatusEnum.FAILED
-        db.commit()
-        return False, f"Dataset directory not found: {dataset_path}"
-
-    try:
-        # Check for the Parquet file
-        parquet_file = os.path.join(dataset_path, "data.parquet")
-        if not os.path.exists(parquet_file):
-            raise FileNotFoundError(f"Parquet file not found at {parquet_file}")
-        logger.info(f"Found Parquet file at {parquet_file}")
-
-        # Optionally, check for dataset_info.json if you're creating it
-        info_file = os.path.join(dataset_path, "dataset_info.json")
-        if os.path.exists(info_file):
-            logger.info(f"Found dataset_info.json at {info_file}")
-        else:
-            logger.warning(f"dataset_info.json not found at {info_file}")
-
-        # Verify the Parquet file can be read
-        try:
-            pd.read_parquet(parquet_file)
-            logger.info("Successfully read Parquet file")
-        except Exception as e:
-            raise ValueError(f"Error reading Parquet file: {str(e)}")
-
-        # If we've made it this far, consider the dataset valid
-        dataset_metadata.status = DownloadStatusEnum.COMPLETED
-        db.commit()
-        logger.info(f"Dataset {dataset_metadata.name} verified successfully")
-        return True, "Dataset verified successfully"
-
-    except Exception as e:
-        dataset_metadata.status = DownloadStatusEnum.FAILED
-        db.commit()
-        error_message = f"Error verifying dataset: {str(e)}"
-        logger.error(error_message)
-        return False, error_message
-
-
 # --- Bulk Data Saving for Clustering Results ---
-
 
 def save_clustering_results(db: Session, results: Dict[str, Any]):
     """
@@ -810,9 +829,6 @@ def save_clustering_results(db: Session, results: Dict[str, Any]):
                 l2_cluster_id
             )  # Find Category DB ID
             if category_db_id is None:
-                # Handle L1 clusters whose titles were noise at L2 or uncategorized
-                # Option 1: Create a default "Uncategorized" category?
-                # Option 2: Skip saving this L1 cluster? (Chosen for now)
                 logger.warning(
                     f"L1 Cluster {l1_cluster_id} ('{title}') maps to L2 ID {l2_cluster_id} which has no category DB ID. Skipping L1 cluster record."
                 )
