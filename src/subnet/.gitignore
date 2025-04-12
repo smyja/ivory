@@ -163,3 +163,4 @@ cython_debug/
 datasets
 *.wal
 !app/dashboard/datasets/
+datasets.db
