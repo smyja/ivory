@@ -45,13 +45,19 @@ class DatasetData(BaseModel):
     pass  # Let FastAPI handle dict serialization for now, assuming basic types
 
 
+class SplitInfo(BaseModel):
+    name: str
+    count: int
+
+
 class DatasetDataResponse(BaseModel):
     metadata: DatasetSimpleMetadata
-    data: List[Dict[str, Any]]  # Expecting list of dicts from df.to_dict('records')
+    data: List[Dict[str, Any]]
     pagination: DatasetDataPagination
     columns: List[str]
     format: str
-    error: Optional[str] = None  # Include optional error field
+    splits_info: Optional[List[SplitInfo]] = None
+    error: Optional[str] = None
 
 
 # Response model for basic/full info (can refine later if needed)
@@ -198,41 +204,126 @@ async def get_dataset_info(
                         if potential_splits:  # Check if list is not empty
                             split_part = potential_splits[0]
 
-                path_parts.append(split_part)
+                primary_path_parts = path_parts + [
+                    split_part
+                ]  # Keep original calculation separate
 
-                # Final path to the directory containing data.parquet
-                final_data_dir = os.path.join(*path_parts)
-
-                logger.info(f"Attempting to load data from directory: {final_data_dir}")
-
+                # Final path to the directory containing data.parquet (Primary Attempt)
+                final_data_dir = os.path.join(*primary_path_parts)
                 parquet_path = os.path.join(final_data_dir, "data.parquet")
+                logger.info(
+                    f"Attempting to load data from primary path: {parquet_path}"
+                )
 
+                # --- Fallback Logic ---
                 if not os.path.exists(parquet_path):
                     logger.warning(
-                        f"Parquet data file not found at calculated path: {parquet_path}"
+                        f"Primary path not found: {parquet_path}. Trying alternatives..."
                     )
-                    # Also log the base path tried for context
-                    logger.warning(f"Base dataset path checked: {base_dataset_path}")
-                    return DatasetDataResponse(
-                        error="Dataset Parquet file not found at expected location.",
-                        metadata=DatasetSimpleMetadata(
-                            id=dataset_metadata.id,
-                            name=dataset_metadata.name,
-                            status=dataset_metadata.status,
-                        ),
-                        pagination=DatasetDataPagination(
-                            total=0, page=page, page_size=page_size, total_pages=0
-                        ),
-                        data=[],
-                        columns=[],
-                        format="unknown",
+                    found_alternative = False
+                    alternative_paths_to_check = []
+
+                    # Alt 1: The CORRECT standard location - _all_splits_ at same level as train
+                    alternative_paths_to_check.append(
+                        os.path.join(base_dataset_path, "_all_splits_", "data.parquet")
                     )
 
-                # Use Parquet file directly
+                    # Alt 2: Train split (if we are going to support individual split selection later)
+                    alternative_paths_to_check.append(
+                        os.path.join(base_dataset_path, "train", "data.parquet")
+                    )
+
+                    # Legacy fallbacks for backward compatibility with existing dataset structures:
+
+                    # Alt 3: 'train' split under config (if config exists) - Old structure
+                    if config_part:
+                        alternative_paths_to_check.append(
+                            os.path.join(
+                                base_dataset_path, config_part, "train", "data.parquet"
+                            )
+                        )
+
+                    # Alt 4: Nested _all_splits_ inside train - Old incorrect structure
+                    if config_part:
+                        alternative_paths_to_check.append(
+                            os.path.join(
+                                base_dataset_path,
+                                config_part,
+                                "train",
+                                "_all_splits_",
+                                "data.parquet",
+                            )
+                        )
+                    alternative_paths_to_check.append(
+                        os.path.join(
+                            base_dataset_path, "train", "_all_splits_", "data.parquet"
+                        )
+                    )
+
+                    # Alt 5: Directly under config (if config exists)
+                    if config_part:
+                        alternative_paths_to_check.append(
+                            os.path.join(base_dataset_path, config_part, "data.parquet")
+                        )
+
+                    # Alt 6: Directly under base
+                    alternative_paths_to_check.append(
+                        os.path.join(base_dataset_path, "data.parquet")
+                    )
+
+                    for alt_path in alternative_paths_to_check:
+                        logger.info(f"Checking alternative path: {alt_path}")
+                        if os.path.exists(alt_path):
+                            parquet_path = alt_path
+                            logger.info(
+                                f"Found data at alternative path: {parquet_path}"
+                            )
+                            found_alternative = True
+                            break  # Use the first alternative found
+
+                    if not found_alternative:
+                        logger.error(
+                            f"Parquet data file not found at primary path or alternatives."
+                        )
+                        logger.warning(
+                            f"Primary path checked: {os.path.join(final_data_dir, 'data.parquet')}"
+                        )
+                        logger.warning(
+                            f"Base dataset path checked: {base_dataset_path}"
+                        )
+                        return DatasetDataResponse(
+                            error="Dataset Parquet file not found at expected location or alternatives.",
+                            metadata=DatasetSimpleMetadata(
+                                id=dataset_metadata.id,
+                                name=dataset_metadata.name,
+                                status=dataset_metadata.status,
+                            ),
+                            pagination=DatasetDataPagination(
+                                total=0, page=page, page_size=page_size, total_pages=0
+                            ),
+                            data=[],
+                            columns=[],
+                            format="unknown",
+                        )
+                else:
+                    logger.info(f"Found data at primary path: {parquet_path}")
+
+                # Use Parquet file directly (parquet_path is now either the primary or a found alternative)
                 df = pd.read_parquet(parquet_path)
 
-                # Get column names
-                column_names = df.columns.tolist()
+                # Extract available splits and counts if column exists
+                splits_info = None
+                if "_hf_split" in df.columns:
+                    split_counts = df["_hf_split"].value_counts().reset_index()
+                    split_counts.columns = [
+                        "name",
+                        "count",
+                    ]  # Rename columns for clarity
+                    splits_info = split_counts.to_dict("records")
+                    logger.info(f"Found splits and counts: {splits_info}")
+
+                # Get column names, EXCLUDING the internal _hf_split column
+                column_names = [col for col in df.columns if col != "_hf_split"]
 
                 # Calculate total count
                 total_count = len(df)
@@ -243,12 +334,15 @@ async def get_dataset_info(
                 paginated_df = df.iloc[offset:end_idx]
 
                 # Convert to serializable format using pandas json methods
-                # This handles numpy types and other complex objects better than direct dict conversion
+                # Drop the internal _hf_split column before serialization for the data payload
+                data_to_serialize = paginated_df.drop(
+                    columns=["_hf_split"], errors="ignore"
+                )
                 result_data = json.loads(
-                    paginated_df.to_json(orient="records", date_format="iso")
+                    data_to_serialize.to_json(orient="records", date_format="iso")
                 )
 
-                # Return data with pagination info
+                # Return data with pagination info and splits
                 return DatasetDataResponse(
                     metadata=DatasetSimpleMetadata(
                         id=dataset_metadata.id,
@@ -262,8 +356,9 @@ async def get_dataset_info(
                         page_size=page_size,
                         total_pages=(total_count + page_size - 1) // page_size,
                     ),
-                    columns=column_names,
+                    columns=column_names,  # Return columns without _hf_split
                     format="parquet",
+                    splits_info=splits_info,  # Return the list of split info objects
                 )
 
             except Exception as e:

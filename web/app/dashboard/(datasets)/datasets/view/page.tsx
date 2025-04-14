@@ -21,6 +21,8 @@ import {
   Title,
   LoadingOverlay,
   Stack,
+  Textarea,
+  Skeleton,
 } from '@mantine/core';
 import {
   IconCopy,
@@ -29,10 +31,14 @@ import {
   IconChevronLeft,
   IconChevronRight,
   IconMaximize,
+  IconEdit,
+  IconDeviceFloppy,
 } from '@tabler/icons-react';
 import ReactMarkdown from 'react-markdown';
 import { notifications } from '@mantine/notifications';
 import { useRouter } from 'next/navigation';
+import ReactDiffViewer from 'react-diff-viewer-continued';
+import * as Diff from 'diff';
 
 import InteractiveRecordModal from './expand';
 import { AccordionStats } from './(components)/accordion';
@@ -42,6 +48,11 @@ import CustomPagination from './pagination';
 
 interface Record {
   [key: string]: string;
+}
+
+interface SplitInfo {
+  name: string;
+  count: number;
 }
 
 interface ApiResponse {
@@ -59,6 +70,8 @@ interface ApiResponse {
   };
   columns: string[];
   format: string;
+  splits_info?: SplitInfo[];
+  error?: string;
 }
 
 interface DatasetInfo {
@@ -97,6 +110,13 @@ const DatasetView: React.FC = () => {
   const [isPageLoading, setIsPageLoading] = useState<boolean>(false);
   const [currentBackendPage, setCurrentBackendPage] = useState<number>(1);
   const [cachedRecords, setCachedRecords] = useState<Record[]>([]);
+  const [isEditing, setIsEditing] = useState<boolean>(false);
+  const [editingFieldKey, setEditingFieldKey] = useState<string | null>(null);
+  const [currentEditValue, setCurrentEditValue] = useState<string>("");
+  const [originalEditValue, setOriginalEditValue] = useState<string>("");
+  const [splitsInfo, setSplitsInfo] = useState<SplitInfo[] | null>(null);
+  const [addedLinesCount, setAddedLinesCount] = useState<number>(0);
+  const [deletedLinesCount, setDeletedLinesCount] = useState<number>(0);
 
   useEffect(() => {
     if (datasetId) {
@@ -154,6 +174,62 @@ const DatasetView: React.FC = () => {
     }
   }, [currentPage, cachedRecords]); // Rerun when page changes or cache updates
 
+  // Calculate Diff Counts Effect
+  useEffect(() => {
+    if (isEditing && editingFieldKey) {
+      try {
+        // Check if Diff.diffLines exists and use it, otherwise use a simple fallback
+        let added = 0;
+        let removed = 0;
+
+        if (typeof Diff.diffLines === 'function') {
+          // Use the built-in diffLines if available
+          const diffResult = Diff.diffLines(originalEditValue, currentEditValue);
+
+          interface DiffPart {
+            added?: boolean;
+            removed?: boolean;
+            count?: number;
+            value: string;
+          }
+
+          diffResult.forEach((part: DiffPart) => {
+            if (part.added) {
+              added += (part.count || 0);
+            } else if (part.removed) {
+              removed += (part.count || 0);
+            }
+          });
+        } else {
+          // Simple fallback: split by lines and compare
+          const originalLines = originalEditValue.split('\n');
+          const currentLines = currentEditValue.split('\n');
+
+          // Very simplified diff count - not accurate but prevents errors
+          const originalLineCount = originalLines.length;
+          const currentLineCount = currentLines.length;
+
+          if (currentLineCount > originalLineCount) {
+            added = currentLineCount - originalLineCount;
+          } else if (originalLineCount > currentLineCount) {
+            removed = originalLineCount - currentLineCount;
+          }
+        }
+
+        setAddedLinesCount(added);
+        setDeletedLinesCount(removed);
+      } catch (error) {
+        console.error('Error calculating diff:', error);
+        setAddedLinesCount(0);
+        setDeletedLinesCount(0);
+      }
+    } else {
+      // Reset counts when not editing
+      setAddedLinesCount(0);
+      setDeletedLinesCount(0);
+    }
+  }, [isEditing, editingFieldKey, originalEditValue, currentEditValue]);
+
   const fetchDatasetInfo = async () => {
     try {
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}?detail_level=full`);
@@ -210,6 +286,7 @@ const DatasetView: React.FC = () => {
 
       setCachedRecords(data.data);
       setTotalRecords(data.pagination.total);
+      setSplitsInfo(data.splits_info || null);
 
       // Show only the first record initially (currentPage is 1)
       if (data.data && data.data.length > 0) {
@@ -230,6 +307,7 @@ const DatasetView: React.FC = () => {
       setCachedRecords([]);
       setFilteredRecords([]);
       setRecords([]);
+      setSplitsInfo(null);
     } finally {
       setIsInitialLoading(false);
     }
@@ -280,10 +358,11 @@ const DatasetView: React.FC = () => {
 
       // Update the cache with the new chunk of records
       setCachedRecords(data.data);
+      setTotalRecords(data.pagination.total);
+      setSplitsInfo(data.splits_info || null);
 
-      // The useEffect hook listening to [currentPage, cachedRecords] will handle
-      // selecting and displaying the correct single record from this new cache.
-      // No need to setFilteredRecords/setRecords here directly anymore.
+      // Trigger record update based on currentPage and new cache
+      // The useEffect watching [currentPage, cachedRecords] will handle this.
 
     } catch (error: any) {
       setError(error.message);
@@ -296,6 +375,7 @@ const DatasetView: React.FC = () => {
       setCachedRecords([]);
       setFilteredRecords([]);
       setRecords([]);
+      setSplitsInfo(null);
     } finally {
       setIsPageLoading(false);
     }
@@ -458,6 +538,77 @@ const DatasetView: React.FC = () => {
       .map(([key, value]) => [key, safeString(value)]);
   };
 
+  // Add save function
+  const handleSaveEdit = async () => {
+    // In a real implementation, you would save to your backend
+    // For now, just update the UI and show notification
+    if (editingFieldKey && filteredRecords.length > 0) {
+      const newRecords = [...filteredRecords];
+      const record = { ...newRecords[0] };
+
+      // Update the record with edited content
+      record[editingFieldKey] = currentEditValue;
+      newRecords[0] = record;
+
+      setFilteredRecords(newRecords);
+
+      // Also update in cached records
+      const indexInBackendPage = (currentPage - 1) % BACKEND_PAGE_SIZE;
+      if (cachedRecords.length > indexInBackendPage) {
+        const newCachedRecords = [...cachedRecords];
+        newCachedRecords[indexInBackendPage] = record;
+        setCachedRecords(newCachedRecords);
+      }
+
+      notifications.show({
+        title: 'Success',
+        message: `Updated ${editingFieldKey} field`,
+        color: 'green',
+      });
+
+      // Exit edit mode
+      setIsEditing(false);
+      setEditingFieldKey(null);
+    }
+  };
+
+  // Function to start editing a field
+  const startEditing = (key: string, value: string) => {
+    setEditingFieldKey(key);
+    setOriginalEditValue(value);
+    setCurrentEditValue(value);
+    setIsEditing(true);
+    // Reset counts immediately on starting edit (will be recalculated by effect)
+    setAddedLinesCount(0);
+    setDeletedLinesCount(0);
+  };
+
+  // Function to cancel editing
+  const cancelEditing = () => {
+    setIsEditing(false);
+    setEditingFieldKey(null);
+    setOriginalEditValue('');
+    setCurrentEditValue('');
+    // Reset counts on cancel
+    setAddedLinesCount(0);
+    setDeletedLinesCount(0);
+  };
+
+  // Placeholder for future split filtering
+  const handleSplitClick = (splitName: string) => {
+    console.log(`Filtering by split: ${splitName}`);
+    notifications.show({
+      title: 'Filter Action',
+      message: `Clicked on split: ${splitName}. Filtering not yet implemented.`,
+      color: 'blue'
+    });
+    // TODO: Implement actual filtering logic here
+    // This might involve:
+    // - Setting a filter state variable
+    // - Re-fetching data from the backend with a split filter parameter
+    // - Or filtering the `cachedRecords` directly on the frontend (if feasible)
+  };
+
   return (
     <Container my="md" fluid>
       <LoadingOverlay visible={isInitialLoading} overlayProps={{ blur: 2 }} />
@@ -532,14 +683,27 @@ const DatasetView: React.FC = () => {
                     currentPage={currentPage}
                     totalPages={totalRecords} // Display total records as total pages
                     onPageChange={setCurrentPage}
-                    disabled={isPageLoading}
+                    disabled={isPageLoading || isEditing}
                   />
+
+                  {isEditing && (
+                    <Group gap="xs">
+                      <ActionIcon color="red" variant="light" onClick={cancelEditing}>
+                        <IconX size="1rem" />
+                      </ActionIcon>
+                      <ActionIcon color="green" variant="light" onClick={handleSaveEdit}>
+                        <IconDeviceFloppy size="1rem" />
+                      </ActionIcon>
+                    </Group>
+                  )}
+
                   <Switch
                     checked={renderMarkdown}
                     onChange={(event) => setRenderMarkdown(event.currentTarget.checked)}
                     color="teal"
                     size="sm"
                     label="Markdown"
+                    disabled={isEditing}
                     thumbIcon={
                       renderMarkdown ? (
                         <IconCheck
@@ -563,6 +727,42 @@ const DatasetView: React.FC = () => {
             <Card.Section inheritPadding mt="md">
               {error ? (
                 <Text c="red">{error}</Text>
+              ) : isEditing && editingFieldKey ? (
+                <div>
+                  <Group justify="space-between" mb="xs">
+                    <Badge color="blue">Editing: {editingFieldKey}</Badge>
+                  </Group>
+
+                  <Textarea
+                    placeholder={`Edit ${editingFieldKey}...`}
+                    value={currentEditValue}
+                    onChange={(event) => setCurrentEditValue(event.currentTarget.value)}
+                    minRows={10}
+                    maxRows={20}
+                    autosize
+                    mb="md"
+                    styles={{ input: { fontFamily: 'monospace' } }}
+                  />
+
+                  {/* Diff View Title with Counts */}
+                  <Group mb="xs" gap="xs" align="center">
+                    <Text size="sm" fw={500}>Diff View:</Text>
+                    {addedLinesCount > 0 && (
+                      <Text size="sm" c="green" fw={500}>+{addedLinesCount}</Text>
+                    )}
+                    {deletedLinesCount > 0 && (
+                      <Text size="sm" c="red" fw={500}>-{deletedLinesCount}</Text>
+                    )}
+                  </Group>
+                  <ReactDiffViewer
+                    oldValue={originalEditValue}
+                    newValue={currentEditValue}
+                    splitView={true}
+                    showDiffOnly={false}
+                    hideLineNumbers={false}
+                    useDarkTheme={false}
+                  />
+                </div>
               ) : filteredRecords.length > 0 ? (
                 <>
                   {(() => {
@@ -587,6 +787,16 @@ const DatasetView: React.FC = () => {
                                     </Tooltip>
                                   )}
                                 </CopyButton>
+                                <Tooltip label="Edit" withArrow position="right">
+                                  <ActionIcon
+                                    color="orange"
+                                    variant="subtle"
+                                    onClick={() => startEditing(fieldKey, fieldValue)}
+                                    disabled={isEditing}
+                                  >
+                                    <IconEdit style={{ width: rem(16) }} />
+                                  </ActionIcon>
+                                </Tooltip>
                                 <Tooltip label="Expand" withArrow position="right">
                                   <ActionIcon
                                     color="blue"
@@ -643,6 +853,16 @@ const DatasetView: React.FC = () => {
                                           </Tooltip>
                                         )}
                                       </CopyButton>
+                                      <Tooltip label="Edit" withArrow position="right">
+                                        <ActionIcon
+                                          color="orange"
+                                          variant="subtle"
+                                          onClick={() => startEditing(field.key, field.value)}
+                                          disabled={isEditing}
+                                        >
+                                          <IconEdit style={{ width: rem(16) }} />
+                                        </ActionIcon>
+                                      </Tooltip>
                                       <Tooltip label="Expand" withArrow position="right">
                                         <ActionIcon
                                           color="blue"
@@ -715,6 +935,25 @@ const DatasetView: React.FC = () => {
                     <Text size="sm" fw={500}>Created:</Text>
                     <Text size="sm">{new Date(datasetInfo.created_at).toLocaleString()}</Text>
                   </Group>
+                  {splitsInfo && splitsInfo.length > 0 && (
+                    <Group justify="space-between" align="flex-start">
+                      <Text size="sm" fw={500}>Splits:</Text>
+                      <Group gap={4} wrap="wrap" justify="flex-end" style={{ maxWidth: '60%' }}>
+                        {splitsInfo.map(split => (
+                          <Badge
+                            key={split.name}
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleSplitClick(split.name)}
+                            style={{ cursor: 'pointer' }}
+                            title={`Click to filter by ${split.name}`}
+                          >
+                            {split.name} ({split.count.toLocaleString()})
+                          </Badge>
+                        ))}
+                      </Group>
+                    </Group>
+                  )}
                   <Group justify="space-between">
                     <Text size="sm" fw={500}>ID:</Text>
                     <Text size="sm">{datasetInfo.id}</Text>
