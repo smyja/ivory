@@ -1,24 +1,14 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { Container, Title, Alert } from '@mantine/core';
-import { ClusteringTable } from '../table';
-
-interface ClusteringHistory {
-    id: number;
-    dataset_id: number;
-    dataset_name: string;
-    clustering_status: 'queued' | 'processing' | 'completed' | 'failed';
-    titling_status: 'not_started' | 'in_progress' | 'completed' | 'failed';
-    created_at: string;
-    completed_at: string | null;
-    error_message?: string;
-}
+import { Container, Title, Alert, Text, Center } from '@mantine/core';
+import { ClusteringTable, ClusteringHistory } from '../table';
 
 export default function ClusteringHistoryPage() {
     const [selectedStatus, setSelectedStatus] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [history, setHistory] = useState<ClusteringHistory[]>([]);
+    const [loading, setLoading] = useState(true);
 
     const fetchHistory = async () => {
         try {
@@ -30,6 +20,8 @@ export default function ClusteringHistoryPage() {
             setHistory(data);
         } catch (error: any) {
             setError(error.message);
+        } finally {
+            setLoading(false);
         }
     };
 
@@ -50,12 +42,28 @@ export default function ClusteringHistoryPage() {
         );
     }
 
+    if (loading) {
+        return (
+            <Container size="xl" py="xl">
+                <Center>
+                    <Text>Loading clustering history...</Text>
+                </Center>
+            </Container>
+        );
+    }
+
     return (
         <Container size="xl" py="xl">
             <Title order={1} mt={20} mb={20} fw={300}>
                 Clustering History
             </Title>
-            <ClusteringTable selectedStatus={selectedStatus} history={history} />
+            {history.length === 0 ? (
+                <Center>
+                    <Text c="dimmed">No clustering history available.</Text>
+                </Center>
+            ) : (
+                <ClusteringTable selectedStatus={selectedStatus} history={history} />
+            )}
         </Container>
     );
 } 

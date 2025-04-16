@@ -6,7 +6,7 @@ import { IconExternalLink } from '@tabler/icons-react';
 import { useRouter } from 'next/navigation';
 import IndicatorBadge from './indicator';
 
-interface ClusteringHistory {
+export interface ClusteringHistory {
   id: number;
   dataset_id: number;
   dataset_name: string;
