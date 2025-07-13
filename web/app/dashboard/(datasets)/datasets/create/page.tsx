@@ -73,7 +73,7 @@ const Datasource = () => {
         onClose={close}
         withCloseButton={false}
         centered
-        size="45%"
+        size="65%"
         radius={20}
         padding={24}
       >

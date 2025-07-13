@@ -122,9 +122,6 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
         if (response.ok) {
           const data = await response.json();
 
-          // Handle both response formats:
-          // 1. Array directly
-          // 2. Object with a 'configs' property containing an array
           let configsArray: string[] = [];
 
           if (Array.isArray(data)) {
@@ -407,15 +404,12 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
         });
         setIsSubmitting(false); // Ensure spinner stops
       }
-      // NOTE: Do NOT reset the form here, as the navigation will unmount the component anyway.
-      // Do NOT set isSubmitting to false here if navigation happens, let the unmount handle it.
 
     } catch (error: any) {
       console.error("Import error:", error);
       // Check if it's a Zod validation error
       if (error.errors) {
-        // Handle Zod errors (e.g., display them near fields)
-        // For now, just show a generic notification
+
         notifications.show({
           color: 'red',
           title: 'Validation Error',
@@ -428,11 +422,9 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
           message: error.message || 'An unexpected error occurred.',
         });
       }
-      setIsSubmitting(false); // Stop spinner on error
+      setIsSubmitting(false); 
     } finally {
-      // Only set isSubmitting false if an error occurred *before* navigation
-      // If navigation occurs, the component unmounts, stopping the spinner naturally.
-      // setIsSubmitting(false); <-- Removed from finally
+
     }
   };
 
