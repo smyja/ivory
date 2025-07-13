@@ -1,9 +1,3 @@
-
-
 export default function HomePage() {
-  return (
-    <>
-  hey
-    </>
-  );
+  return <>hey</>;
 }

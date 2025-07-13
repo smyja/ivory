@@ -80,7 +80,11 @@ export function ClusteringTable({ selectedStatus, history }: ClusteringTableProp
   const rows = paginatedData.map((row) => (
     <Table.Tr key={row.id}>
       <Table.Td>
-        <Anchor component="button" size="sm" onClick={() => router.push(`/dashboard/datasets/view?id=${row.dataset_id}`)}>
+        <Anchor
+          component="button"
+          size="sm"
+          onClick={() => router.push(`/dashboard/datasets/view?id=${row.dataset_id}`)}
+        >
           {row.dataset_name}
         </Anchor>
       </Table.Td>
@@ -107,7 +111,9 @@ export function ClusteringTable({ selectedStatus, history }: ClusteringTableProp
           color="black"
           radius="md"
           rightSection={<IconExternalLink size={14} />}
-          onClick={() => router.push(`/dashboard/datasets/cluster?id=${row.dataset_id}&version=${row.version}`)}
+          onClick={() =>
+            router.push(`/dashboard/datasets/cluster?id=${row.dataset_id}&version=${row.version}`)
+          }
           disabled={row.clustering_status !== 'completed'}
           styles={{
             root: {
@@ -150,13 +156,23 @@ export function ClusteringTable({ selectedStatus, history }: ClusteringTableProp
 
       <Box style={{ overflow: 'hidden', borderRadius: '8px' }}>
         <Group p="md" style={{ backgroundColor: '#f8f9fa' }}>
-          <Text fw={500} c="dimmed" style={{ flex: 1 }}>Dataset</Text>
-          <Text fw={500} c="dimmed" style={{ flex: 1 }}>Clustering Status</Text>
-          <Text fw={500} c="dimmed" style={{ flex: 1 }}>Started At</Text>
-          <Text fw={500} c="dimmed" style={{ flex: 1 }}>Completed At</Text>
-          <Text fw={500} c="dimmed" style={{ flex: 1 }}>Actions</Text>
+          <Text fw={500} c="dimmed" style={{ flex: 1 }}>
+            Dataset
+          </Text>
+          <Text fw={500} c="dimmed" style={{ flex: 1 }}>
+            Clustering Status
+          </Text>
+          <Text fw={500} c="dimmed" style={{ flex: 1 }}>
+            Started At
+          </Text>
+          <Text fw={500} c="dimmed" style={{ flex: 1 }}>
+            Completed At
+          </Text>
+          <Text fw={500} c="dimmed" style={{ flex: 1 }}>
+            Actions
+          </Text>
         </Group>
-        <Table verticalSpacing="xs" highlightOnHover style={{ backgroundColor: "white" }}>
+        <Table verticalSpacing="xs" highlightOnHover style={{ backgroundColor: 'white' }}>
           <Table.Tbody>{rows}</Table.Tbody>
         </Table>
 

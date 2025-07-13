@@ -1,4 +1,5 @@
 'use client';
+
 import React from 'react';
 import {
   Text,
@@ -13,7 +14,6 @@ import {
   Title,
 } from '@mantine/core';
 import Link from 'next/link';
-import classes from './FeaturesAsymmetrical.module.css';
 import Image from 'next/image';
 import {
   IconBrandNotion,
@@ -28,6 +28,7 @@ import {
 import { useDisclosure } from '@mantine/hooks';
 import { modals } from '@mantine/modals';
 import { redirect } from 'next/dist/server/api-utils';
+import classes from './FeaturesAsymmetrical.module.css';
 import AuthenticationTitle from './import';
 
 const Datasource = () => {

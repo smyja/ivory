@@ -1,5 +1,6 @@
-"use client";
-import React, { useState, ChangeEvent } from "react";
+'use client';
+
+import React, { useState, ChangeEvent } from 'react';
 import {
   Avatar,
   ActionIcon,
@@ -13,62 +14,51 @@ import {
   List,
   ThemeIcon,
   rem,
-} from "@mantine/core";
-import {
-  IconSearch,
-  IconArrowRight,
-  IconCircleCheck,
-  IconCircleDashed,
-} from "@tabler/icons-react";
-import classes from "./Chat.module.css";
-import axios from "axios";
+} from '@mantine/core';
+import { IconSearch, IconArrowRight, IconCircleCheck, IconCircleDashed } from '@tabler/icons-react';
+import axios from 'axios';
+import classes from './Chat.module.css';
 
 interface Message {
-  type: "user" | "bot";
+  type: 'user' | 'bot';
   text: string;
 }
 
-const WelcomeMessage: React.FC = () => {
-  return (
-    <Center style={{ paddingRight: "143px", paddingTop: "30px" }}>
-      <Paper radius="sm" withBorder p="xl">
-        <Text size="xl">Welcome to the AI Chatbot!</Text>
-        <Text size="md">Start a conversation or try some examples.</Text>
-        <List
-          spacing="xs"
-          size="sm"
-          center
+const WelcomeMessage: React.FC = () => (
+  <Center style={{ paddingRight: '143px', paddingTop: '30px' }}>
+    <Paper radius="sm" withBorder p="xl">
+      <Text size="xl">Welcome to the AI Chatbot!</Text>
+      <Text size="md">Start a conversation or try some examples.</Text>
+      <List
+        spacing="xs"
+        size="sm"
+        center
+        icon={
+          <ThemeIcon color="teal" size={24} radius="xl">
+            <IconCircleCheck size="1rem" />
+          </ThemeIcon>
+        }
+      >
+        <List.Item>Clone or download repository from GitHub</List.Item>
+        <List.Item>Install dependencies with yarn</List.Item>
+        <List.Item>To start development server run npm start command</List.Item>
+        <List.Item>Run tests to make sure your changes do not break the build</List.Item>
+        <List.Item
           icon={
-            <ThemeIcon color="teal" size={24} radius="xl">
-              <IconCircleCheck size="1rem" />
+            <ThemeIcon color="blue" size={24} radius="xl">
+              <IconCircleDashed size="1rem" />
             </ThemeIcon>
           }
         >
-          <List.Item>Clone or download repository from GitHub</List.Item>
-          <List.Item>Install dependencies with yarn</List.Item>
-          <List.Item>
-            To start development server run npm start command
-          </List.Item>
-          <List.Item>
-            Run tests to make sure your changes do not break the build
-          </List.Item>
-          <List.Item
-            icon={
-              <ThemeIcon color="blue" size={24} radius="xl">
-                <IconCircleDashed size="1rem" />
-              </ThemeIcon>
-            }
-          >
-            Submit a pull request once you are done
-          </List.Item>
-        </List>
-      </Paper>
-    </Center>
-  );
-};
+          Submit a pull request once you are done
+        </List.Item>
+      </List>
+    </Paper>
+  </Center>
+);
 
 const ChatBot: React.FC = () => {
-  const [inputValue, setInputValue] = useState<string>("");
+  const [inputValue, setInputValue] = useState<string>('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
 
@@ -79,13 +69,13 @@ const ChatBot: React.FC = () => {
   const handleSendMessage = async (event: React.FormEvent) => {
     event.preventDefault();
     if (inputValue.trim()) {
-      setMessages([...messages, { type: "user", text: inputValue.trim() }]);
-      setInputValue("");
+      setMessages([...messages, { type: 'user', text: inputValue.trim() }]);
+      setInputValue('');
       setLoading(true); // Set loading to true before making the API call
 
       try {
         // Make a POST request to the API with the user's message
-        const response = await axios.post("http://127.0.0.1:80/chat/", {
+        const response = await axios.post('http://127.0.0.1:80/chat/', {
           message: inputValue.trim(),
         });
 
@@ -93,10 +83,7 @@ const ChatBot: React.FC = () => {
         const botResponse = response.data.response;
 
         // Update the chat messages with the bot's response
-        setMessages((prevMessages) => [
-          ...prevMessages,
-          { type: "bot", text: botResponse },
-        ]);
+        setMessages((prevMessages) => [...prevMessages, { type: 'bot', text: botResponse }]);
       } catch (error) {
         console.error("Error fetching bot's response:", error);
         // Handle any errors (e.g., show an error message to the user)
@@ -107,14 +94,14 @@ const ChatBot: React.FC = () => {
   };
 
   return (
-    <Center style={{ height: "calc(100vh - 60px)" }}>
+    <Center style={{ height: 'calc(100vh - 60px)' }}>
       <div
         style={{
-          width: "1200px",
-          padding: "40px",
-          display: "flex",
-          flexDirection: "column",
-          height: "100%",
+          width: '1200px',
+          padding: '40px',
+          display: 'flex',
+          flexDirection: 'column',
+          height: '100%',
         }}
       >
         {/* Chat messages container */}
@@ -124,13 +111,10 @@ const ChatBot: React.FC = () => {
           ) : (
             messages.map((message, index) => (
               <React.Fragment key={index}>
-                <Paper style={{ margin: "10px 0", padding: "10px" }}>
+                <Paper style={{ margin: '10px 0', padding: '10px' }}>
                   <Group>
-                    <Avatar
-                      size={40}
-                      color={message.type === "bot" ? "blue" : "teal"}
-                    >
-                      {message.type === "bot" ? "B" : "U"}
+                    <Avatar size={40} color={message.type === 'bot' ? 'blue' : 'teal'}>
+                      {message.type === 'bot' ? 'B' : 'U'}
                     </Avatar>
                     <Text>{message.text}</Text>
                   </Group>
@@ -142,8 +126,8 @@ const ChatBot: React.FC = () => {
         </div>
 
         {/* Input container */}
-        <div style={{ marginTop: "40px" }}>
-          <Paper style={{ padding: "10px" }}>
+        <div style={{ marginTop: '40px' }}>
+          <Paper style={{ padding: '10px' }}>
             <Group>
               <form onSubmit={handleSendMessage}>
                 <TextInput
@@ -154,23 +138,11 @@ const ChatBot: React.FC = () => {
                   onChange={handleInputChange}
                   rightSectionWidth={42}
                   leftSection={
-                    <IconSearch
-                      style={{ width: rem(18), height: rem(18) }}
-                      stroke={1.5}
-                    />
+                    <IconSearch style={{ width: rem(18), height: rem(18) }} stroke={1.5} />
                   }
                   rightSection={
-                    <ActionIcon
-                      type="submit"
-                      size={32}
-                      radius="xl"
-                      color={"red"}
-                      variant="filled"
-                    >
-                      <IconArrowRight
-                        style={{ width: rem(18), height: rem(18) }}
-                        stroke={1.5}
-                      />
+                    <ActionIcon type="submit" size={32} radius="xl" color="red" variant="filled">
+                      <IconArrowRight style={{ width: rem(18), height: rem(18) }} stroke={1.5} />
                     </ActionIcon>
                   }
                   classNames={{

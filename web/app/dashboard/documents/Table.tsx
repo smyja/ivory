@@ -1,4 +1,5 @@
-"use client"
+'use client';
+
 import { useState } from 'react';
 import {
   Table,
@@ -13,12 +14,19 @@ import {
   Button,
   ActionIcon,
   List,
-  ThemeIcon
-
+  ThemeIcon,
 } from '@mantine/core';
-import { IconSelector, IconChevronDown, IconChevronUp, IconSearch,IconPlus,IconTrash,IconCircleCheck } from '@tabler/icons-react';
+import {
+  IconSelector,
+  IconChevronDown,
+  IconChevronUp,
+  IconSearch,
+  IconPlus,
+  IconTrash,
+  IconCircleCheck,
+} from '@tabler/icons-react';
 import classes from './Table.module.css';
-import Upload from "./Dropzone"
+import Upload from './Dropzone';
 
 interface RowData {
   name: string;
@@ -30,7 +38,7 @@ interface ThProps {
   children: React.ReactNode;
   reversed: boolean;
   sorted: boolean;
-  onSort(): void;
+  onSort: () => void;
 }
 
 function Th({ children, reversed, sorted, onSort }: ThProps) {
@@ -199,17 +207,16 @@ export function DocumentTableSort() {
 
   return (
     <ScrollArea>
-        <Group mt={10} justify="space-between">  
-          <TextInput
-        placeholder="Search by any field"
-      
-        width={30}
-        leftSection={<IconSearch style={{ width: rem(16), height: rem(16) }} stroke={1.5} />}
-        value={search}
-        onChange={handleSearchChange}
-      />
-        
-      <Upload onFilesSelect={handleFilesSelect} />
+      <Group mt={10} justify="space-between">
+        <TextInput
+          placeholder="Search by any field"
+          width={30}
+          leftSection={<IconSearch style={{ width: rem(16), height: rem(16) }} stroke={1.5} />}
+          value={search}
+          onChange={handleSearchChange}
+        />
+
+        <Upload onFilesSelect={handleFilesSelect} />
       </Group>
 
       {files.length > 0 && (
@@ -218,32 +225,28 @@ export function DocumentTableSort() {
         </Text>
       )}
 
-    
-        {files.map((file, index) => (
+      {files.map((file, index) => (
+        <List
+          spacing="lg"
+          size="md"
+          center
+          icon={
+            <ThemeIcon color="teal" size={24} radius="xl">
+              <IconCircleCheck style={{ width: rem(16), height: rem(16) }} />
+            </ThemeIcon>
+          }
+        >
+          <List.Item key={index} mb={10}>
+            <Group>
+              {file.name}
+              <ActionIcon onClick={() => removeFile(index)} size="xs" ml="sm">
+                <IconTrash size={16} />
+              </ActionIcon>
+            </Group>
+          </List.Item>
+        </List>
+      ))}
 
-              <List
-              spacing="lg"
-              size="md"
-              center
-              icon={
-                <ThemeIcon color="teal" size={24} radius="xl">
-                  <IconCircleCheck style={{ width: rem(16), height: rem(16) }} />
-                </ThemeIcon>
-              }
-            >
-              <List.Item key={index} mb={10}>          
-              <Group>
-                   {file.name}
-                        <ActionIcon onClick={() => removeFile(index)} size="xs" ml="sm">
-              <IconTrash size={16} />
-            </ActionIcon>
-            </Group></List.Item>
-         
-         
-            </List>
-        ))}
-      
- 
       <Table mt={30} horizontalSpacing="md" verticalSpacing="xs" miw={700} layout="fixed">
         <Table.Tbody>
           <Table.Tr>
@@ -287,5 +290,3 @@ export function DocumentTableSort() {
     </ScrollArea>
   );
 }
-
-

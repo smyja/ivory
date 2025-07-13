@@ -4,11 +4,15 @@ import { IconSearch, IconX } from '@tabler/icons-react';
 
 interface SearchComponentProps {
   onSearch: (searchTerm: string) => void;
-  width?: string;        // Optional width prop
-  borderRadius?: string;  // Optional borderRadius prop
+  width?: string; // Optional width prop
+  borderRadius?: string; // Optional borderRadius prop
 }
 
-const SearchComponent: React.FC<SearchComponentProps> = ({ onSearch, width = '600px', borderRadius = '8px' }) => {
+const SearchComponent: React.FC<SearchComponentProps> = ({
+  onSearch,
+  width = '600px',
+  borderRadius = '8px',
+}) => {
   const [searchTerm, setSearchTerm] = useState('');
   const theme = useMantineTheme();
 

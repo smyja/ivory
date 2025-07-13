@@ -11,7 +11,7 @@ import {
   IconChevronRight,
   IconSwitchHorizontal,
   IconLogout,
-  IconDatabase
+  IconDatabase,
 } from '@tabler/icons-react';
 import Link from 'next/link';
 import classes from './NavbarSimpleColored.module.css';
@@ -87,7 +87,7 @@ export function NavbarSimpleColored() {
                       stroke={1.5}
                       style={{
                         transform: openGroup === item.label ? 'rotate(90deg)' : 'none',
-                        marginLeft: rem(-5)
+                        marginLeft: rem(-5),
                       }}
                     />
                   </Group>
@@ -102,8 +102,9 @@ export function NavbarSimpleColored() {
                         onClick={() => handleLinkClick(subLink)}
                       >
                         <div
-                          className={`${classes.link} ${pathname === subLink.link ? classes.active : ''
-                            }`}
+                          className={`${classes.link} ${
+                            pathname === subLink.link ? classes.active : ''
+                          }`}
                         >
                           {subLink.label}
                         </div>
@@ -113,16 +114,15 @@ export function NavbarSimpleColored() {
                 </Collapse>
               </Box>
             );
-          } else {
-            return item.link ? (
-              <Link href={item.link} key={item.label} onClick={() => handleLinkClick(item)}>
-                <div className={`${classes.link} ${active === item.label ? classes.active : ''}`}>
-                  <item.icon className={classes.linkIcon} stroke={1.5} />
-                  <span>{item.label}</span>
-                </div>
-              </Link>
-            ) : null;
           }
+          return item.link ? (
+            <Link href={item.link} key={item.label} onClick={() => handleLinkClick(item)}>
+              <div className={`${classes.link} ${active === item.label ? classes.active : ''}`}>
+                <item.icon className={classes.linkIcon} stroke={1.5} />
+                <span>{item.label}</span>
+              </div>
+            </Link>
+          ) : null;
         })}
       </div>
 

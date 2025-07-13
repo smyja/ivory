@@ -35,7 +35,6 @@ export default function Models() {
         combobox.updateSelectedOptionIndex('active');
         combobox.closeDropdown();
       }}
-     
     >
       <Combobox.Target targetType="button">
         <InputBase
@@ -43,7 +42,9 @@ export default function Models() {
           pointer
           rightSection={<Combobox.Chevron />}
           onClick={() => combobox.toggleDropdown()}
-          w={320} mb={22} mt={10}
+          w={320}
+          mb={22}
+          mt={10}
         >
           {value || <Input.Placeholder>Pick value</Input.Placeholder>}
         </InputBase>

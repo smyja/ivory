@@ -87,7 +87,7 @@
     "stylelint-config-standard-scss": "^13.0.0",
     "ts-jest": "^29.1.2",
     "typescript": "5.4.2",
-    "wrangler": "^3.28.2"
+    "wrangler": "^4.24.3"
   },
   "packageManager": "yarn@4.2.2"
 }

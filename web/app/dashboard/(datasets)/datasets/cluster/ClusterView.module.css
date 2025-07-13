@@ -1,117 +1,119 @@
 .root {
-    padding-top: 1rem;
+  padding-top: 1rem;
 }
 
 .categoryCard {
-    background: var(--mantine-color-white);
-    transition: transform 0.2s ease, box-shadow 0.2s ease;
+  background: var(--mantine-color-white);
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
 }
 
 .categoryCard:hover {
-    transform: translateY(-2px);
-    box-shadow: var(--mantine-shadow-md);
+  transform: translateY(-2px);
+  box-shadow: var(--mantine-shadow-md);
 }
 
 .categoryInfo {
-    flex: 0 0 250px;
-    padding: 1.5rem;
-    border-right: 1px solid var(--mantine-color-gray-2);
-    min-height: 200px;
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
+  flex: 0 0 250px;
+  padding: 1.5rem;
+  border-right: 1px solid var(--mantine-color-gray-2);
+  min-height: 200px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
 }
 
 .subclusterContainer {
-    flex: 1;
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 1rem;
-    width: 100%;
-    padding: 1.5rem;
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+  width: 100%;
+  padding: 1.5rem;
 }
 
 .subclusterCard {
-    background: var(--mantine-color-gray-0);
-    transition: all 0.2s ease;
-    border: 1px solid var(--mantine-color-gray-2);
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-    min-height: 120px;
-    cursor: pointer;
-    user-select: none;
+  background: var(--mantine-color-gray-0);
+  transition: all 0.2s ease;
+  border: 1px solid var(--mantine-color-gray-2);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-height: 120px;
+  cursor: pointer;
+  user-select: none;
 }
 
 .subclusterCard:hover {
-    transform: translateY(-2px);
-    box-shadow: var(--mantine-shadow-md);
-    border-color: var(--mantine-color-dark-4);
-    background: var(--mantine-color-white);
+  transform: translateY(-2px);
+  box-shadow: var(--mantine-shadow-md);
+  border-color: var(--mantine-color-dark-4);
+  background: var(--mantine-color-white);
 }
 
 .subclusterCard:active {
-    transform: translateY(0);
-    border-color: var(--mantine-color-dark-5);
-    box-shadow: var(--mantine-shadow-sm);
+  transform: translateY(0);
+  border-color: var(--mantine-color-dark-5);
+  box-shadow: var(--mantine-shadow-sm);
 }
 
 .value {
-    font-size: 2rem;
-    font-weight: 700;
-    line-height: 1;
-    color: var(--mantine-color-dark-8);
+  font-size: 2rem;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--mantine-color-dark-8);
 }
 
 .diff {
-    display: flex;
-    align-items: center;
-    line-height: 1;
-    margin-bottom: 0.5rem;
+  display: flex;
+  align-items: center;
+  line-height: 1;
+  margin-bottom: 0.5rem;
 }
 
 .diff span {
-    margin-right: 0.25rem;
+  margin-right: 0.25rem;
 }
 
 .categoryTitle {
-    font-size: 1.5rem;
-    font-weight: 600;
-    color: var(--mantine-color-dark-8);
-    margin-bottom: 1rem;
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--mantine-color-dark-8);
+  margin-bottom: 1rem;
 }
 
 .categoryStats {
-    color: var(--mantine-color-gray-6);
-    font-size: 0.9rem;
+  color: var(--mantine-color-gray-6);
+  font-size: 0.9rem;
 }
 
 .subclusterTitle {
-    font-weight: 500;
-    color: var(--mantine-color-dark-7);
-    margin-bottom: 1rem;
-    line-height: 1.4;
+  font-weight: 500;
+  color: var(--mantine-color-dark-7);
+  margin-bottom: 1rem;
+  line-height: 1.4;
 }
 
 @media (max-width: 768px) {
-    .categoryInfo {
-        flex: 0 0 100%;
-        padding: 1rem;
-        border-right: none;
-        border-bottom: 1px solid var(--mantine-color-gray-2);
-        min-height: auto;
-    }
+  .categoryInfo {
+    flex: 0 0 100%;
+    padding: 1rem;
+    border-right: none;
+    border-bottom: 1px solid var(--mantine-color-gray-2);
+    min-height: auto;
+  }
 
-    .subclusterContainer {
-        grid-template-columns: 1fr;
-        padding: 1rem;
-    }
+  .subclusterContainer {
+    grid-template-columns: 1fr;
+    padding: 1rem;
+  }
 
-    .value {
-        font-size: 1.5rem;
-    }
+  .value {
+    font-size: 1.5rem;
+  }
 }
 
 .icon {
-    color: var(--mantine-color-gray-4);
+  color: var(--mantine-color-gray-4);
 }

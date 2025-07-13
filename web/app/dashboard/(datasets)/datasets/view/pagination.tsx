@@ -15,28 +15,26 @@ const CustomPagination: React.FC<CustomPaginationProps> = ({
   totalPages,
   onPageChange,
   disabled = false,
-}) => {
-  return (
-    <Group gap={5} align="center">
-      <ActionIcon
-        color="gray"
-        onClick={() => onPageChange(Math.max(1, currentPage - 1))}
-        disabled={disabled || currentPage === 1}
-      >
-        <IconChevronLeft size="1rem" />
-      </ActionIcon>
-      <Text size="sm" style={{ opacity: disabled ? 0.7 : 1 }}>
-        {currentPage} of {totalPages.toLocaleString()}
-      </Text>
-      <ActionIcon
-        color="gray"
-        onClick={() => onPageChange(Math.min(totalPages, currentPage + 1))}
-        disabled={disabled || currentPage === totalPages}
-      >
-        <IconChevronRight size="1rem" />
-      </ActionIcon>
-    </Group>
-  );
-};
+}) => (
+  <Group gap={5} align="center">
+    <ActionIcon
+      color="gray"
+      onClick={() => onPageChange(Math.max(1, currentPage - 1))}
+      disabled={disabled || currentPage === 1}
+    >
+      <IconChevronLeft size="1rem" />
+    </ActionIcon>
+    <Text size="sm" style={{ opacity: disabled ? 0.7 : 1 }}>
+      {currentPage} of {totalPages.toLocaleString()}
+    </Text>
+    <ActionIcon
+      color="gray"
+      onClick={() => onPageChange(Math.min(totalPages, currentPage + 1))}
+      disabled={disabled || currentPage === totalPages}
+    >
+      <IconChevronRight size="1rem" />
+    </ActionIcon>
+  </Group>
+);
 
 export default CustomPagination;

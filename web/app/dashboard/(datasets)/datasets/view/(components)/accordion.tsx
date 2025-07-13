@@ -6,21 +6,24 @@ const charactersList = [
     image: 'https://img.icons8.com/clouds/256/000000/futurama-bender.png',
     label: 'Tree',
     description: 'Tree View of this document',
-    content: ''  },
+    content: '',
+  },
 
   {
     id: 'carol',
     image: 'https://img.icons8.com/clouds/256/000000/futurama-mom.png',
     label: 'Language',
     description: 'Languages present in the dataset',
-    content: ''  },
+    content: '',
+  },
 
   {
     id: 'homer',
     image: 'https://img.icons8.com/clouds/256/000000/homer-simpson.png',
     label: 'Statistics',
     description: 'All Stats for this dataset',
-    content: ''  },
+    content: '',
+  },
 ];
 
 interface AccordionLabelProps {

@@ -1,4 +1,5 @@
 'use client';
+
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { Menu, Button, Text, rem, Badge, Group } from '@mantine/core';
 import { IconX } from '@tabler/icons-react';
@@ -34,10 +35,7 @@ const safeString = (value: any): string => {
   return String(value);
 };
 
-const InteractiveRecordModal: React.FC<InteractiveRecordModalProps> = ({
-  content,
-  onClose,
-}) => {
+const InteractiveRecordModal: React.FC<InteractiveRecordModalProps> = ({ content, onClose }) => {
   // Convert content to a safe string at the component level
   const safeContent = safeString(content);
 
@@ -69,8 +67,8 @@ const InteractiveRecordModal: React.FC<InteractiveRecordModalProps> = ({
         type: 'key',
         number,
         text: currentSelection.text,
-        range: currentSelection.range
-      }
+        range: currentSelection.range,
+      },
     ]);
     setCurrentSelection(null);
     window.getSelection()?.removeAllRanges();
@@ -133,7 +131,11 @@ const InteractiveRecordModal: React.FC<InteractiveRecordModalProps> = ({
             key={index}
             color="red"
             rightSection={
-              <IconX size="0.8rem" style={{ cursor: 'pointer' }} onClick={() => removeSelection(index)} />
+              <IconX
+                size="0.8rem"
+                style={{ cursor: 'pointer' }}
+                onClick={() => removeSelection(index)}
+              />
             }
           >
             {`Key ${selection.number}: ${selection.text}`}

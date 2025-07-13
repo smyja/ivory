@@ -1,13 +1,5 @@
 {
-    "version": 1,
-    "include": [
-        "/*"
-    ],
-    "exclude": [
-        "/build/*",
-        "/static/*",
-        "/node_modules/*",
-        "/.next/*",
-        "/.git/*"
-    ]
+  "version": 1,
+  "include": ["/*"],
+  "exclude": ["/build/*", "/static/*", "/node_modules/*", "/.next/*", "/.git/*"]
 }

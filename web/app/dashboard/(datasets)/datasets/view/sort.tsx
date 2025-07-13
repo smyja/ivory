@@ -1,12 +1,7 @@
-
 import { useState } from 'react';
 import { Box, Button, Combobox, Text, useCombobox } from '@mantine/core';
 
-const groceries = [
-  'id',
-  'time',
-  'date'
-];
+const groceries = ['id', 'time', 'date'];
 
 export function SortButton() {
   const [search, setSearch] = useState('');
@@ -59,8 +54,6 @@ export function SortButton() {
           </Combobox.Options>
         </Combobox.Dropdown>
       </Combobox>
-
-
     </>
   );
 }

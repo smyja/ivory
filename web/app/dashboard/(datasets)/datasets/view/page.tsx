@@ -1,6 +1,7 @@
 'use client';
+
 import React, { useState, useEffect } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 import {
   Container,
   Grid,
@@ -36,7 +37,6 @@ import {
 } from '@tabler/icons-react';
 import ReactMarkdown from 'react-markdown';
 import { notifications } from '@mantine/notifications';
-import { useRouter } from 'next/navigation';
 import ReactDiffViewer from 'react-diff-viewer-continued';
 import * as Diff from 'diff';
 
@@ -112,8 +112,8 @@ const DatasetView: React.FC = () => {
   const [cachedRecords, setCachedRecords] = useState<Record[]>([]);
   const [isEditing, setIsEditing] = useState<boolean>(false);
   const [editingFieldKey, setEditingFieldKey] = useState<string | null>(null);
-  const [currentEditValue, setCurrentEditValue] = useState<string>("");
-  const [originalEditValue, setOriginalEditValue] = useState<string>("");
+  const [currentEditValue, setCurrentEditValue] = useState<string>('');
+  const [originalEditValue, setOriginalEditValue] = useState<string>('');
   const [splitsInfo, setSplitsInfo] = useState<SplitInfo[] | null>(null);
   const [addedLinesCount, setAddedLinesCount] = useState<number>(0);
   const [deletedLinesCount, setDeletedLinesCount] = useState<number>(0);
@@ -195,9 +195,9 @@ const DatasetView: React.FC = () => {
 
           diffResult.forEach((part: DiffPart) => {
             if (part.added) {
-              added += (part.count || 0);
+              added += part.count || 0;
             } else if (part.removed) {
-              removed += (part.count || 0);
+              removed += part.count || 0;
             }
           });
         } else {
@@ -232,7 +232,9 @@ const DatasetView: React.FC = () => {
 
   const fetchDatasetInfo = async () => {
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}?detail_level=full`);
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}?detail_level=full`
+      );
       if (!response.ok) {
         throw new Error('Failed to fetch dataset info');
       }
@@ -315,13 +317,13 @@ const DatasetView: React.FC = () => {
 
   const fetchBackendPage = async (backendPage: number) => {
     if (backendPage < 1) {
-      console.error("Attempted to fetch backend page < 1 (", backendPage, "). Aborting fetch.");
-      setError("Invalid page number requested.");
+      console.error('Attempted to fetch backend page < 1 (', backendPage, '). Aborting fetch.');
+      setError('Invalid page number requested.');
       setIsPageLoading(false);
       return;
     }
 
-    console.log("Fetching backend page:", backendPage);
+    console.log('Fetching backend page:', backendPage);
     try {
       setIsPageLoading(true);
       const response = await fetch(
@@ -363,7 +365,6 @@ const DatasetView: React.FC = () => {
 
       // Trigger record update based on currentPage and new cache
       // The useEffect watching [currentPage, cachedRecords] will handle this.
-
     } catch (error: any) {
       setError(error.message);
       notifications.show({
@@ -409,7 +410,7 @@ const DatasetView: React.FC = () => {
 
       const data = await response.json();
       const formattedRecords = data.texts.map((text: any) => ({
-        text: text.text
+        text: text.text,
       }));
       setRecords(formattedRecords);
       setFilteredRecords(formattedRecords);
@@ -442,7 +443,7 @@ const DatasetView: React.FC = () => {
       const searchParams = new URLSearchParams({
         page: '1',
         page_size: BACKEND_PAGE_SIZE.toString(),
-        search: terms.join(' ')
+        search: terms.join(' '),
       });
 
       const response = await fetch(
@@ -521,7 +522,7 @@ const DatasetView: React.FC = () => {
     while (record[`structured_key_${index}`]) {
       fields.push({
         key: safeString(record[`structured_key_${index}`]),
-        value: safeString(record[`structured_value_${index}`])
+        value: safeString(record[`structured_value_${index}`]),
       });
       index++;
     }
@@ -529,14 +530,10 @@ const DatasetView: React.FC = () => {
     return fields;
   };
 
-  const getOriginalFields = (record: Record) => {
-    return Object.entries(record)
-      .filter(([key]) =>
-        !key.startsWith('structured_key_') &&
-        !key.startsWith('structured_value_')
-      )
+  const getOriginalFields = (record: Record) =>
+    Object.entries(record)
+      .filter(([key]) => !key.startsWith('structured_key_') && !key.startsWith('structured_value_'))
       .map(([key, value]) => [key, safeString(value)]);
-  };
 
   // Add save function
   const handleSaveEdit = async () => {
@@ -600,7 +597,7 @@ const DatasetView: React.FC = () => {
     notifications.show({
       title: 'Filter Action',
       message: `Clicked on split: ${splitName}. Filtering not yet implemented.`,
-      color: 'blue'
+      color: 'blue',
     });
     // TODO: Implement actual filtering logic here
     // This might involve:
@@ -617,8 +614,8 @@ const DatasetView: React.FC = () => {
           <div>
             <Title order={2}>{datasetInfo?.name || 'Loading...'}</Title>
             <Text c="dimmed" size="sm">
-              {datasetInfo?.identifier ? `Identifier: ${datasetInfo.identifier}` : 'No identifier'} •{' '}
-              {datasetInfo?.status ? `Status: ${datasetInfo.status}` : 'No status'}
+              {datasetInfo?.identifier ? `Identifier: ${datasetInfo.identifier}` : 'No identifier'}{' '}
+              • {datasetInfo?.status ? `Status: ${datasetInfo.status}` : 'No status'}
               {subclusterId && ' • Viewing Subcluster Texts'}
             </Text>
           </div>
@@ -671,7 +668,7 @@ const DatasetView: React.FC = () => {
               style={{
                 backgroundColor: 'lavenderblush',
                 opacity: isPageLoading ? 0.7 : 1,
-                transition: 'opacity 0.2s ease'
+                transition: 'opacity 0.2s ease',
               }}
             >
               <Group justify="space-between" align="center">
@@ -746,18 +743,24 @@ const DatasetView: React.FC = () => {
 
                   {/* Diff View Title with Counts */}
                   <Group mb="xs" gap="xs" align="center">
-                    <Text size="sm" fw={500}>Diff View:</Text>
+                    <Text size="sm" fw={500}>
+                      Diff View:
+                    </Text>
                     {addedLinesCount > 0 && (
-                      <Text size="sm" c="green" fw={500}>+{addedLinesCount}</Text>
+                      <Text size="sm" c="green" fw={500}>
+                        +{addedLinesCount}
+                      </Text>
                     )}
                     {deletedLinesCount > 0 && (
-                      <Text size="sm" c="red" fw={500}>-{deletedLinesCount}</Text>
+                      <Text size="sm" c="red" fw={500}>
+                        -{deletedLinesCount}
+                      </Text>
                     )}
                   </Group>
                   <ReactDiffViewer
                     oldValue={originalEditValue}
                     newValue={currentEditValue}
-                    splitView={true}
+                    splitView
                     showDiffOnly={false}
                     hideLineNumbers={false}
                     useDarkTheme={false}
@@ -772,12 +775,22 @@ const DatasetView: React.FC = () => {
                         {getOriginalFields(record).map(([fieldKey, fieldValue], fieldIndex) => (
                           <React.Fragment key={fieldKey}>
                             <Group justify="space-between" mb="xs">
-                              <Badge color={fieldKey === 'chat' ? 'blue' : 'gray'}>{fieldKey}</Badge>
+                              <Badge color={fieldKey === 'chat' ? 'blue' : 'gray'}>
+                                {fieldKey}
+                              </Badge>
                               <Group gap="xs">
                                 <CopyButton value={fieldValue} timeout={2000}>
                                   {({ copied, copy }) => (
-                                    <Tooltip label={copied ? 'Copied' : 'Copy'} withArrow position="right">
-                                      <ActionIcon color={copied ? 'teal' : 'gray'} variant="subtle" onClick={copy}>
+                                    <Tooltip
+                                      label={copied ? 'Copied' : 'Copy'}
+                                      withArrow
+                                      position="right"
+                                    >
+                                      <ActionIcon
+                                        color={copied ? 'teal' : 'gray'}
+                                        variant="subtle"
+                                        onClick={copy}
+                                      >
                                         {copied ? (
                                           <IconCheck style={{ width: rem(16) }} />
                                         ) : (
@@ -814,7 +827,9 @@ const DatasetView: React.FC = () => {
                             <pre style={preStyles}>
                               <Highlight highlight={searchTerms}>{fieldValue}</Highlight>
                             </pre>
-                            {fieldIndex < getOriginalFields(record).length - 1 && <Divider my="sm" />}
+                            {fieldIndex < getOriginalFields(record).length - 1 && (
+                              <Divider my="sm" />
+                            )}
                           </React.Fragment>
                         ))}
 
@@ -826,7 +841,9 @@ const DatasetView: React.FC = () => {
                                 <React.Fragment key={structuredIndex}>
                                   <Group gap="xs" mb="xs">
                                     <Group gap={4}>
-                                      <Text color="dimmed" size="sm">└─</Text>
+                                      <Text color="dimmed" size="sm">
+                                        └─
+                                      </Text>
                                       <Badge
                                         color="pink"
                                         variant="light"
@@ -842,8 +859,16 @@ const DatasetView: React.FC = () => {
                                     <Group gap="xs">
                                       <CopyButton value={field.value} timeout={2000}>
                                         {({ copied, copy }) => (
-                                          <Tooltip label={copied ? 'Copied' : 'Copy'} withArrow position="right">
-                                            <ActionIcon color={copied ? 'teal' : 'gray'} variant="subtle" onClick={copy}>
+                                          <Tooltip
+                                            label={copied ? 'Copied' : 'Copy'}
+                                            withArrow
+                                            position="right"
+                                          >
+                                            <ActionIcon
+                                              color={copied ? 'teal' : 'gray'}
+                                              variant="subtle"
+                                              onClick={copy}
+                                            >
                                               {copied ? (
                                                 <IconCheck style={{ width: rem(16) }} />
                                               ) : (
@@ -868,7 +893,10 @@ const DatasetView: React.FC = () => {
                                           color="blue"
                                           variant="subtle"
                                           onClick={() => {
-                                            setSelectedRecord({ key: field.key, value: field.value });
+                                            setSelectedRecord({
+                                              key: field.key,
+                                              value: field.value,
+                                            });
                                             setModalOpen(true);
                                           }}
                                         >
@@ -879,15 +907,18 @@ const DatasetView: React.FC = () => {
                                   </Group>
                                   <div style={{ paddingLeft: rem(35) }}>
                                     {renderMarkdown ? (
-                                      <ReactMarkdown components={customRenderers}>{field.value}</ReactMarkdown>
+                                      <ReactMarkdown components={customRenderers}>
+                                        {field.value}
+                                      </ReactMarkdown>
                                     ) : (
                                       <pre style={preStyles}>
                                         <Highlight highlight={searchTerms}>{field.value}</Highlight>
                                       </pre>
                                     )}
                                   </div>
-                                  {structuredIndex < getStructuredFields(record).length - 1 &&
-                                    <Divider my="sm" variant="dashed" />}
+                                  {structuredIndex < getStructuredFields(record).length - 1 && (
+                                    <Divider my="sm" variant="dashed" />
+                                  )}
                                 </React.Fragment>
                               ))}
                             </div>
@@ -912,34 +943,58 @@ const DatasetView: React.FC = () => {
               {datasetInfo ? (
                 <Stack gap="xs">
                   <Group justify="space-between">
-                    <Text size="sm" fw={500}>Identifier:</Text>
+                    <Text size="sm" fw={500}>
+                      Identifier:
+                    </Text>
                     <Text size="sm">{datasetInfo.identifier}</Text>
                   </Group>
                   <Group justify="space-between">
-                    <Text size="sm" fw={500}>Source:</Text>
+                    <Text size="sm" fw={500}>
+                      Source:
+                    </Text>
                     <Text size="sm">{datasetInfo.source}</Text>
                   </Group>
                   <Group justify="space-between">
-                    <Text size="sm" fw={500}>Status:</Text>
-                    <Badge color={datasetInfo.status === 'completed' ? 'green' : 'yellow'} size="sm">
+                    <Text size="sm" fw={500}>
+                      Status:
+                    </Text>
+                    <Badge
+                      color={datasetInfo.status === 'completed' ? 'green' : 'yellow'}
+                      size="sm"
+                    >
                       {datasetInfo.status}
                     </Badge>
                   </Group>
                   <Group justify="space-between">
-                    <Text size="sm" fw={500}>Clustering:</Text>
-                    <Badge color={datasetInfo.clustering_status === 'completed' ? 'blue' : datasetInfo.is_clustered ? 'cyan' : 'gray'} size="sm">
+                    <Text size="sm" fw={500}>
+                      Clustering:
+                    </Text>
+                    <Badge
+                      color={
+                        datasetInfo.clustering_status === 'completed'
+                          ? 'blue'
+                          : datasetInfo.is_clustered
+                            ? 'cyan'
+                            : 'gray'
+                      }
+                      size="sm"
+                    >
                       {datasetInfo.clustering_status} {datasetInfo.is_clustered ? '(Active)' : ''}
                     </Badge>
                   </Group>
                   <Group justify="space-between">
-                    <Text size="sm" fw={500}>Created:</Text>
+                    <Text size="sm" fw={500}>
+                      Created:
+                    </Text>
                     <Text size="sm">{new Date(datasetInfo.created_at).toLocaleString()}</Text>
                   </Group>
                   {splitsInfo && splitsInfo.length > 0 && (
                     <Group justify="space-between" align="flex-start">
-                      <Text size="sm" fw={500}>Splits:</Text>
+                      <Text size="sm" fw={500}>
+                        Splits:
+                      </Text>
                       <Group gap={4} wrap="wrap" justify="flex-end" style={{ maxWidth: '60%' }}>
-                        {splitsInfo.map(split => (
+                        {splitsInfo.map((split) => (
                           <Badge
                             key={split.name}
                             variant="outline"
@@ -955,12 +1010,16 @@ const DatasetView: React.FC = () => {
                     </Group>
                   )}
                   <Group justify="space-between">
-                    <Text size="sm" fw={500}>ID:</Text>
+                    <Text size="sm" fw={500}>
+                      ID:
+                    </Text>
                     <Text size="sm">{datasetInfo.id}</Text>
                   </Group>
                 </Stack>
               ) : (
-                <Text size="sm" c="dimmed">Loading details...</Text>
+                <Text size="sm" c="dimmed">
+                  Loading details...
+                </Text>
               )}
             </Card.Section>
           </Card>

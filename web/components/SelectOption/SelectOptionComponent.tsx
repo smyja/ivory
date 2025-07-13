@@ -8,10 +8,14 @@ interface Item {
 }
 
 const dataFormats: Item[] = [
-  { emoji: '🤗', value: 'HuggingFace', description: 'AI model repository and collaboration platform'},
-  { emoji: '📊', value: 'CSV', description: 'CSV file format for tabular data'},
-  { emoji: '{ }', value: 'JSON', description: 'Json, a lightweight data interchange format'},
-  { emoji: '📦', value: 'Parquet', description: 'Columnar storage file format'},
+  {
+    emoji: '🤗',
+    value: 'HuggingFace',
+    description: 'AI model repository and collaboration platform',
+  },
+  { emoji: '📊', value: 'CSV', description: 'CSV file format for tabular data' },
+  { emoji: '{ }', value: 'JSON', description: 'Json, a lightweight data interchange format' },
+  { emoji: '📦', value: 'Parquet', description: 'Columnar storage file format' },
 ];
 
 function SelectOption({ emoji, value, description }: Item) {
@@ -36,13 +40,17 @@ interface SelectOptionComponentProps {
   disabledOptions: string[];
 }
 
-export function SelectOptionComponent({ value, onChange, disabledOptions }: SelectOptionComponentProps) {
+export function SelectOptionComponent({
+  value,
+  onChange,
+  disabledOptions,
+}: SelectOptionComponentProps) {
   const combobox = useCombobox({
     onDropdownClose: () => combobox.resetSelectedOption(),
   });
 
   const [selectedValue, setSelectedValue] = useState<string | null>(value);
-  
+
   useEffect(() => {
     setSelectedValue(value);
   }, [value]);
@@ -50,8 +58,8 @@ export function SelectOptionComponent({ value, onChange, disabledOptions }: Sele
   const selectedOption = dataFormats.find((item) => item.value === selectedValue);
 
   const options = dataFormats.map((item) => (
-    <Combobox.Option 
-      value={item.value} 
+    <Combobox.Option
+      value={item.value}
       key={item.value}
       disabled={disabledOptions.includes(item.value)}
     >

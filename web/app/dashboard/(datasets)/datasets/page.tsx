@@ -63,7 +63,7 @@ export default function DatasetsPage() {
         id: parseInt(trackId),
         name: trackName,
         status: 'pending',
-        message: 'Starting download...'
+        message: 'Starting download...',
       });
 
       // Remove the tracking params from the URL to avoid readding on refresh
@@ -150,7 +150,7 @@ export default function DatasetsPage() {
           throw new Error('Failed to fetch clustering status');
         }
         const data = await response.json();
-        setClusteringStatus(prev => ({
+        setClusteringStatus((prev) => ({
           ...prev,
           [datasetId]: data.status,
         }));
@@ -259,7 +259,7 @@ export default function DatasetsPage() {
                   { label: 'Status', width: '20%' },
                   { label: 'Clustering Status', width: '20%' },
                   { label: 'Download Date', width: '20%' },
-                  { label: 'Actions', width: '10%', minWidth: '200px' }
+                  { label: 'Actions', width: '10%', minWidth: '200px' },
                 ].map((header) => (
                   <Table.Th
                     key={header.label}
@@ -272,7 +272,7 @@ export default function DatasetsPage() {
                       fontSize: '16px',
                       fontWeight: 500,
                       padding: '16px',
-                      textTransform: 'none'
+                      textTransform: 'none',
                     }}
                   >
                     {header.label}
@@ -301,7 +301,16 @@ export default function DatasetsPage() {
                 paginatedData.map((dataset) => (
                   <Table.Tr key={dataset.id}>
                     <Table.Td>
-                      <Text size="sm" fw={500} style={{ maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <Text
+                        size="sm"
+                        fw={500}
+                        style={{
+                          maxWidth: '300px',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
                         {dataset.name}
                       </Text>
                     </Table.Td>
@@ -325,9 +334,7 @@ export default function DatasetsPage() {
                         </Badge>
                       )}
                     </Table.Td>
-                    <Table.Td>
-                      {formatDate(dataset.download_date || dataset.created_at)}
-                    </Table.Td>
+                    <Table.Td>{formatDate(dataset.download_date || dataset.created_at)}</Table.Td>
                     <Table.Td>
                       <Group gap="xs" wrap="nowrap">
                         <Tooltip label="View Dataset">

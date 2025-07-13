@@ -1,7 +1,8 @@
-"use client"
+'use client';
+
 import { useSearchParams, useRouter } from 'next/navigation';
-import { useConnectNotionMutation } from '@/redux/features/authApiSlice';
 import { useEffect } from 'react';
+import { useConnectNotionMutation } from '@/redux/features/authApiSlice';
 
 // For static export, we'll create a placeholder page
 const Callback = () => {

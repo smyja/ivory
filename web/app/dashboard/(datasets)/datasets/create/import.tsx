@@ -5,7 +5,6 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { z } from 'zod';
 import { useForm, zodResolver } from '@mantine/form';
 import classes from '@styles/global.module.css';
-import { SelectOptionComponent } from '@/components/SelectOption/SelectOptionComponent';
 import {
   TextInput,
   Paper,
@@ -27,6 +26,7 @@ import {
 } from '@mantine/core';
 import { IconInfoCircle } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
+import { SelectOptionComponent } from '@/components/SelectOption/SelectOptionComponent';
 import { API_BASE_URL, API_ENDPOINTS } from '@/app/config/api';
 import { useDownloads } from '@/components/DownloadNotifications/DownloadContext';
 
@@ -63,7 +63,10 @@ const schema = z.object({
   limitRows: z.number().optional(),
   hfRevision: z.string().optional(),
   selectedColumns: z.array(z.string()).optional(),
-  textFields: z.array(z.string()).min(1, { message: 'Please select at least one Text Field for clustering' }).optional(),
+  textFields: z
+    .array(z.string())
+    .min(1, { message: 'Please select at least one Text Field for clustering' })
+    .optional(),
 });
 
 export default function AuthenticationTitle({ onClose }: { onClose: () => void }) {
@@ -110,7 +113,7 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
   // Load configs when HuggingFace dataset name changes
   useEffect(() => {
     const fetchConfigs = async () => {
-      const hfDatasetName = form.values.hfDatasetName;
+      const { hfDatasetName } = form.values;
       if (!hfDatasetName) {
         setConfigs([]);
         return;
@@ -118,7 +121,9 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
 
       setIsLoadingConfigs(true);
       try {
-        const response = await fetch(`${API_BASE_URL}${API_ENDPOINTS.datasets.huggingface.configs}?dataset_name=${encodeURIComponent(hfDatasetName)}`);
+        const response = await fetch(
+          `${API_BASE_URL}${API_ENDPOINTS.datasets.huggingface.configs}?dataset_name=${encodeURIComponent(hfDatasetName)}`
+        );
         if (response.ok) {
           const data = await response.json();
 
@@ -279,7 +284,7 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
       const columnNames = Object.keys(features);
       const options = columnNames.map((colName: string) => ({ value: colName, label: colName }));
       setFeatureOptions(options);
-      console.log("Updated feature options based on features state:", options);
+      console.log('Updated feature options based on features state:', options);
     } else {
       setFeatureOptions([]);
       // Reset dependent selections if features become invalid
@@ -287,15 +292,19 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
       form.setFieldValue('labelField', '');
       form.setFieldValue('selectedColumns', []);
       // Log why it was reset (could be initial load, empty response, or error)
-      if (features) { // Only log if features isn't undefined/null
-        console.log("Reset feature options because features object was empty or invalid.", features);
+      if (features) {
+        // Only log if features isn't undefined/null
+        console.log(
+          'Reset feature options because features object was empty or invalid.',
+          features
+        );
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [features]); // Keep dependencies, but form is stable
 
   const handleSelectAllChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const checked = event.currentTarget.checked;
+    const { checked } = event.currentTarget;
     setAllColumnsSelected(checked);
     if (checked) {
       form.setFieldValue('selectedColumns', Object.keys(features));
@@ -309,7 +318,9 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
     const token = 'YOUR_AUTH_TOKEN_HERE';
 
     // Determine which columns to actually send (all if checkbox checked)
-    const allColumnsSelected = !features?.columns || (values.selectedColumns && values.selectedColumns.length === features.columns.length);
+    const allColumnsSelected =
+      !features?.columns ||
+      (values.selectedColumns && values.selectedColumns.length === features.columns.length);
 
     let requestBody: any = {
       name: values.datasetName,
@@ -333,10 +344,13 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
       };
 
       // Client-side validation (using Zod automatically handles the textFields check)
-      if (!requestBody.hf_dataset_name) throw new Error("HuggingFace Dataset ID is required.");
-      if (!requestBody.text_fields || requestBody.text_fields.length === 0) throw new Error("Please select at least one Text Field for clustering.");
+      if (!requestBody.hf_dataset_name) throw new Error('HuggingFace Dataset ID is required.');
+      if (!requestBody.text_fields || requestBody.text_fields.length === 0)
+        throw new Error('Please select at least one Text Field for clustering.');
       if (!allColumnsSelected && (!values.selectedColumns || values.selectedColumns.length === 0)) {
-        throw new Error("Please select at least one column to import or check 'Select All Columns'.");
+        throw new Error(
+          "Please select at least one column to import or check 'Select All Columns'."
+        );
       }
     } else {
       // Handle URL/Upload specific fields
@@ -344,7 +358,7 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
     }
 
     try {
-      console.log("Sending dataset creation request:", requestBody);
+      console.log('Sending dataset creation request:', requestBody);
 
       // Make the API call to create dataset
       const response = await fetch(`${API_BASE_URL}${API_ENDPOINTS.datasets.download}`, {
@@ -378,7 +392,7 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
           id: result.id,
           name: values.datasetName,
           status: 'pending',
-          message: 'Starting download...'
+          message: 'Starting download...',
         });
 
         // Show a toast notification to alert the user about the download
@@ -404,12 +418,10 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
         });
         setIsSubmitting(false); // Ensure spinner stops
       }
-
     } catch (error: any) {
-      console.error("Import error:", error);
+      console.error('Import error:', error);
       // Check if it's a Zod validation error
       if (error.errors) {
-
         notifications.show({
           color: 'red',
           title: 'Validation Error',
@@ -422,9 +434,8 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
           message: error.message || 'An unexpected error occurred.',
         });
       }
-      setIsSubmitting(false); 
+      setIsSubmitting(false);
     } finally {
-
     }
   };
 
@@ -434,7 +445,7 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
   // Prepare column data for MultiSelect
   const columnSelectData = Object.entries(features).map(([name, type]) => ({
     value: name,
-    label: `${name} (${type})`
+    label: `${name} (${type})`,
   }));
 
   return (
@@ -488,8 +499,8 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
                   <Select
                     {...form.getInputProps('hfConfig')}
                     label="Configuration"
-                    placeholder={isLoadingConfigs ? "Loading..." : "Select a configuration"}
-                    data={configs.map(config => ({ value: config, label: config }))}
+                    placeholder={isLoadingConfigs ? 'Loading...' : 'Select a configuration'}
+                    data={configs.map((config) => ({ value: config, label: config }))}
                     disabled={isLoadingConfigs || configs.length === 0}
                     clearable
                     rightSection={isLoadingConfigs ? <Loader size="xs" /> : null}
@@ -507,8 +518,14 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
                   <Select
                     {...form.getInputProps('hfSplit')}
                     label="Split"
-                    placeholder={isLoadingSplits ? "Loading..." : splits.length > 0 ? "Select a split (optional, defaults to all)" : "No splits available"}
-                    data={splits.map(split => ({ value: split, label: split }))}
+                    placeholder={
+                      isLoadingSplits
+                        ? 'Loading...'
+                        : splits.length > 0
+                          ? 'Select a split (optional, defaults to all)'
+                          : 'No splits available'
+                    }
+                    data={splits.map((split) => ({ value: split, label: split }))}
                     disabled={isLoadingSplits || splits.length === 0}
                     clearable
                     rightSection={isLoadingSplits ? <Loader size="xs" /> : null}
@@ -523,9 +540,13 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
 
                 <Divider my="lg" label="Column Selection" labelPosition="center" />
                 {isLoadingFeatures ? (
-                  <Group justify="center"><Loader size="sm" /> <Text size="sm">Loading columns...</Text></Group>
+                  <Group justify="center">
+                    <Loader size="sm" /> <Text size="sm">Loading columns...</Text>
+                  </Group>
                 ) : !form.values.hfDatasetName ? (
-                  <Text size="sm" c="dimmed" ta="center">Enter a dataset name above to view available columns</Text>
+                  <Text size="sm" c="dimmed" ta="center">
+                    Enter a dataset name above to view available columns
+                  </Text>
                 ) : columnSelectData.length > 0 ? (
                   <>
                     <Checkbox
@@ -556,7 +577,13 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
                   <MultiSelect
                     {...form.getInputProps('textFields')}
                     label="Text Field(s) for Clustering"
-                    placeholder={isLoadingFeatures ? "Loading features..." : featureOptions.length > 0 ? "Select one or more text columns" : "Load features first"}
+                    placeholder={
+                      isLoadingFeatures
+                        ? 'Loading features...'
+                        : featureOptions.length > 0
+                          ? 'Select one or more text columns'
+                          : 'Load features first'
+                    }
                     data={featureOptions}
                     disabled={isLoadingFeatures || featureOptions.length === 0}
                     searchable
@@ -569,7 +596,13 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
                   <Select
                     {...form.getInputProps('labelField')}
                     label="Label Field (Optional)"
-                    placeholder={isLoadingFeatures ? "Loading features..." : featureOptions.length > 0 ? "Select a label column" : "Load features first"}
+                    placeholder={
+                      isLoadingFeatures
+                        ? 'Loading features...'
+                        : featureOptions.length > 0
+                          ? 'Select a label column'
+                          : 'Load features first'
+                    }
                     data={featureOptions}
                     disabled={isLoadingFeatures || featureOptions.length === 0}
                     clearable
@@ -594,7 +627,11 @@ export default function AuthenticationTitle({ onClose }: { onClose: () => void }
               Create Dataset
             </Button>
 
-            {error && <Text c="red" mt="sm">{error}</Text>}
+            {error && (
+              <Text c="red" mt="sm">
+                {error}
+              </Text>
+            )}
           </Paper>
         </Container>
       </form>
