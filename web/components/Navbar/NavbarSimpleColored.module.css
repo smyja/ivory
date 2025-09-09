@@ -4,7 +4,7 @@
   padding: var(--mantine-spacing-md);
   display: flex;
   flex-direction: column;
-  background-color: black;
+  background-color: midnightblue;
   border-right: rem(1px) solid var(--mantine-color-dark-4);
 }
 
@@ -33,7 +33,7 @@
   color: white;
   border: 0.5px solid rgba(255, 255, 255, 0.15);
 
-  border-color: rgba(255, 255, 255, 0.25);
+  border-color: rgb(64, 67, 255);
 }
 
 .accountButton:hover {
@@ -62,7 +62,7 @@
   width: rem(40px);
   height: rem(40px);
   border-radius: var(--mantine-radius-sm);
-  background: #2f2f2f;
+  background: #a25656;
   border: 1px solid rgba(255, 255, 255, 0.12);
 }
 
@@ -137,7 +137,7 @@
 }
 
 .link[data-active] {
-  background-color: tomato;
+  background-color: #9a47ff;
   color: white;
 }
 
@@ -168,7 +168,7 @@
 }
 
 .control.active {
-  background-color: tomato;
+  background-color: #9a47ff;
   color: white;
 }
 
@@ -198,7 +198,7 @@
 }
 
 .link.active {
-  background-color: tomato;
+  background-color: #9a47ff;
   color: white;
 }
 
