@@ -9,7 +9,6 @@ import {
   IconMessageChatbot,
   IconFiles,
   IconChevronRight,
-  IconSwitchHorizontal,
   IconLogout,
   IconDatabase,
 } from '@tabler/icons-react';
@@ -44,6 +43,8 @@ const data: NavItem[] = [
 export function NavbarSimpleColored() {
   const pathname = usePathname();
   const router = useRouter();
+  const accountLabel = 'dummyemail';
+  const accountInitials = accountLabel.slice(0, 2).toUpperCase();
 
   const findLabelByPath = (path: string) => {
     const matchingItem = data.find((item) =>
@@ -54,6 +55,7 @@ export function NavbarSimpleColored() {
 
   const [active, setActive] = useState(findLabelByPath(pathname));
   const [openGroup, setOpenGroup] = useState('');
+  const [accountExpanded, setAccountExpanded] = useState(false);
 
   useEffect(() => {
     setActive(findLabelByPath(pathname));
@@ -68,6 +70,33 @@ export function NavbarSimpleColored() {
 
   return (
     <>
+      <div className={classes.accountContainer}>
+        <button
+          type="button"
+          className={classes.accountButton}
+          aria-haspopup="true"
+          aria-expanded={accountExpanded}
+          onClick={() => setAccountExpanded((v) => !v)}
+        >
+          <div className={classes.accountContent}>
+            <div className={classes.accountLeft}>
+              <div className={classes.accountAvatar}>
+                <span>{accountInitials}</span>
+              </div>
+              <div className={classes.accountInfo}>
+                <p className={classes.accountName}>{accountLabel}</p>
+              </div>
+            </div>
+            <IconChevronRight
+              className={`${classes.accountChevron} ${
+                accountExpanded ? classes.accountChevronExpanded : ''
+              }`}
+              stroke={1.5}
+            />
+          </div>
+        </button>
+      </div>
+
       <div className={classes.navbarMain}>
         {data.map((item) => {
           if (item.links) {
@@ -127,11 +156,6 @@ export function NavbarSimpleColored() {
       </div>
 
       <div className={classes.footer}>
-        <Link href="/dashboard/settings" className={classes.link}>
-          <IconSwitchHorizontal className={classes.linkIcon} stroke={1.5} />
-          <span>Change account</span>
-        </Link>
-
         <a href="#" className={classes.link} onClick={(event) => event.preventDefault()}>
           <IconLogout className={classes.linkIcon} stroke={1.5} />
           <span>Logout</span>

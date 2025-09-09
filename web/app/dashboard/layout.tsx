@@ -64,7 +64,7 @@ export default function DashboardLayout({
             </Box>
           </Group>
         </AppShell.Header>
-        <AppShell.Navbar p="sm" style={{ backgroundColor: 'black' }}>
+        <AppShell.Navbar p={0} style={{ backgroundColor: 'black' }}>
           <NavbarSimpleColored />
         </AppShell.Navbar>
 
