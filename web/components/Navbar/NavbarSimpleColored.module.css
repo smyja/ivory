@@ -62,7 +62,7 @@
   width: rem(40px);
   height: rem(40px);
   border-radius: var(--mantine-radius-sm);
-  background: #a25656;
+  background: lightcoral;
   border: 1px solid rgba(255, 255, 255, 0.12);
 }
 
@@ -137,7 +137,7 @@
 }
 
 .link[data-active] {
-  background-color: #9a47ff;
+  background-color: lightcoral;
   color: white;
 }
 
@@ -168,7 +168,7 @@
 }
 
 .control.active {
-  background-color: #9a47ff;
+  background-color: lightcoral;
   color: white;
 }
 
@@ -198,7 +198,7 @@
 }
 
 .link.active {
-  background-color: #9a47ff;
+  background-color: lightcoral;
   color: white;
 }
 
