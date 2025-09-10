@@ -65,6 +65,7 @@ export function SortButton({
           rightSection={
             <Tooltip label={`Direction: ${direction.toUpperCase()}`} withinPortal>
               <ActionIcon
+                component="span"
                 size="sm"
                 variant="subtle"
                 color="gray"

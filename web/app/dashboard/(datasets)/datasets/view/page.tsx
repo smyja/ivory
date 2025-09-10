@@ -663,7 +663,7 @@ const DatasetView: React.FC = () => {
                 styles={{
                   root: {
                     transition: 'background-color 0.2s ease',
-                    backgroundColor: 'lightseagreen',
+                    backgroundColor: 'midnightblue',
                     '&:hover': {
                       backgroundColor: '#333',
                     },
