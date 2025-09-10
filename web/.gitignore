@@ -48,6 +48,16 @@ web_modules/
 # TypeScript cache
 *.tsbuildinfo
 
+# Vercel
+.vercel
+
+# OpenNext
+.open-next
+
+# Cloudflare
+cloudflare-env.d.ts
+.dev.vars
+.wrangler
 # Optional npm cache directory
 .npm
 
