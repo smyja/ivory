@@ -24,6 +24,7 @@ import {
   Stack,
   Textarea,
   Skeleton,
+  Box,
 } from '@mantine/core';
 import {
   IconCopy,
@@ -34,10 +35,13 @@ import {
   IconMaximize,
   IconEdit,
   IconDeviceFloppy,
+  IconCircleCheck,
 } from '@tabler/icons-react';
 import ReactMarkdown from 'react-markdown';
 import { notifications } from '@mantine/notifications';
 import ReactDiffViewer from 'react-diff-viewer-continued';
+import { runQuery, upsertLabelByRowId } from '@/app/lib/queryClient';
+import { API_BASE_URL } from '@/app/config/api';
 import * as Diff from 'diff';
 
 import InteractiveRecordModal from './expand';
@@ -117,17 +121,22 @@ const DatasetView: React.FC = () => {
   const [splitsInfo, setSplitsInfo] = useState<SplitInfo[] | null>(null);
   const [addedLinesCount, setAddedLinesCount] = useState<number>(0);
   const [deletedLinesCount, setDeletedLinesCount] = useState<number>(0);
+  const [isLabelSaving, setIsLabelSaving] = useState<boolean>(false);
+  const [queryWhere, setQueryWhere] = useState<any[] | undefined>(undefined);
+  const [orderByState, setOrderByState] = useState<{ column: string; direction: 'asc' | 'desc' } | undefined>(undefined);
+  const [defaultSearchColumn, setDefaultSearchColumn] = useState<string>('text');
 
   useEffect(() => {
     if (datasetId) {
       fetchDatasetInfo();
-      if (subclusterId) {
-        fetchSubclusterTexts();
-      } else {
-        fetchInitialRecords();
-      }
     }
-  }, [datasetId, subclusterId]);
+  }, [datasetId]);
+
+  useEffect(() => {
+    if (datasetId && !subclusterId && datasetInfo?.name) {
+      fetchInitialRecords();
+    }
+  }, [datasetId, subclusterId, datasetInfo?.name]);
 
   // Calculate which backend page we need based on the current frontend page
   useEffect(() => {
@@ -233,7 +242,7 @@ const DatasetView: React.FC = () => {
   const fetchDatasetInfo = async () => {
     try {
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}?detail_level=full`
+        `${API_BASE_URL}/datasets/${datasetId}?detail_level=full`
       );
       if (!response.ok) {
         throw new Error('Failed to fetch dataset info');
@@ -251,49 +260,40 @@ const DatasetView: React.FC = () => {
     }
   };
 
-  const fetchInitialRecords = async () => {
+  const fetchInitialRecords = async (
+    whereOverride?: any[] | undefined,
+    orderOverride?: { column: string; direction: 'asc' | 'desc' } | undefined
+  ) => {
     try {
       setIsInitialLoading(true);
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}?detail_level=data&page=1&page_size=${BACKEND_PAGE_SIZE}`
-      );
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        let errorMessage = 'Failed to fetch records';
-
-        switch (response.status) {
-          case 404:
-            errorMessage = `Dataset not found: ${errorData.detail}`;
-            break;
-          case 400:
-            errorMessage = `Invalid request: ${errorData.detail}`;
-            break;
-          case 500:
-            errorMessage = `Server error: ${errorData.detail}`;
-            break;
-          default:
-            errorMessage = errorData.detail || errorMessage;
-        }
-
-        throw new Error(errorMessage);
+      // Require datasetInfo to resolve dataset name
+      if (!datasetInfo?.name) {
+        throw new Error('Dataset name not loaded');
       }
+      const res = await runQuery({
+        dataset: datasetInfo.name,
+        select: ['*'],
+        limit: BACKEND_PAGE_SIZE,
+        offset: 0,
+        where: (whereOverride && whereOverride.length ? whereOverride : queryWhere) || undefined,
+        order_by: orderOverride || orderByState,
+        return_total: true,
+      });
 
-      const data: ApiResponse = await response.json();
-
-      // Check if data and data.data exist
-      if (!data || !data.data) {
-        throw new Error('Invalid response format: records data is missing');
+      const rows = res.rows || [];
+      setCachedRecords(rows);
+      // Update default search column if needed
+      if (rows.length > 0) {
+        const keys = Object.keys(rows[0] as any);
+        if (keys.includes('text')) setDefaultSearchColumn('text');
+        else if (keys.length > 0) setDefaultSearchColumn(keys[0]);
       }
+      setTotalRecords(typeof res.total === 'number' ? res.total : rows.length);
+      setSplitsInfo(null);
 
-      setCachedRecords(data.data);
-      setTotalRecords(data.pagination.total);
-      setSplitsInfo(data.splits_info || null);
-
-      // Show only the first record initially (currentPage is 1)
-      if (data.data && data.data.length > 0) {
-        setFilteredRecords([data.data[0]]);
-        setRecords([data.data[0]]);
+      if (rows.length > 0) {
+        setFilteredRecords([rows[0]]);
+        setRecords([rows[0]]);
       } else {
         setFilteredRecords([]);
         setRecords([]);
@@ -326,42 +326,24 @@ const DatasetView: React.FC = () => {
     console.log('Fetching backend page:', backendPage);
     try {
       setIsPageLoading(true);
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}?detail_level=data&page=${backendPage}&page_size=${BACKEND_PAGE_SIZE}`
-      );
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        let errorMessage = 'Failed to fetch records';
-
-        switch (response.status) {
-          case 404:
-            errorMessage = `Dataset not found: ${errorData.detail}`;
-            break;
-          case 400:
-            errorMessage = `Invalid request: ${errorData.detail}`;
-            break;
-          case 500:
-            errorMessage = `Server error: ${errorData.detail}`;
-            break;
-          default:
-            errorMessage = errorData.detail || errorMessage;
-        }
-
-        throw new Error(errorMessage);
+      if (!datasetInfo?.name) {
+        throw new Error('Dataset name not loaded');
       }
+      const offset = (backendPage - 1) * BACKEND_PAGE_SIZE;
+      const res = await runQuery({
+        dataset: datasetInfo.name,
+        select: ['*'],
+        limit: BACKEND_PAGE_SIZE,
+        offset,
+        where: queryWhere && queryWhere.length ? queryWhere : undefined,
+        order_by: orderByState,
+        return_total: true,
+      });
 
-      const data: ApiResponse = await response.json();
-
-      // Check if data and data.data exist
-      if (!data || !data.data) {
-        throw new Error('Invalid response format: records data is missing');
-      }
-
-      // Update the cache with the new chunk of records
-      setCachedRecords(data.data);
-      setTotalRecords(data.pagination.total);
-      setSplitsInfo(data.splits_info || null);
+      const rows = res.rows || [];
+      setCachedRecords(rows);
+      setTotalRecords(typeof res.total === 'number' ? res.total : rows.length);
+      setSplitsInfo(null);
 
       // Trigger record update based on currentPage and new cache
       // The useEffect watching [currentPage, cachedRecords] will handle this.
@@ -387,7 +369,7 @@ const DatasetView: React.FC = () => {
       setIsInitialLoading(true);
       setLoading(true);
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/level1_clusters/${subclusterId}/texts`
+        `${API_BASE_URL}/level1_clusters/${subclusterId}/texts`
       );
 
       if (!response.ok) {
@@ -429,53 +411,6 @@ const DatasetView: React.FC = () => {
     }
   };
 
-  const handleSearch = async (term: string) => {
-    const terms = term.split(' ').filter((t) => t.trim() !== '');
-    setSearchTerms(terms);
-
-    if (terms.length === 0) {
-      fetchInitialRecords();
-      return;
-    }
-
-    try {
-      setIsInitialLoading(true);
-      const searchParams = new URLSearchParams({
-        page: '1',
-        page_size: BACKEND_PAGE_SIZE.toString(),
-        search: terms.join(' '),
-      });
-
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}/records?${searchParams}`
-      );
-      if (!response.ok) {
-        throw new Error('Failed to search records');
-      }
-      const data: ApiResponse = await response.json();
-      setCachedRecords(data.data);
-      setTotalRecords(data.pagination.total);
-      setCurrentPage(1);
-
-      // Show the first record of the search results
-      if (data.data && data.data.length > 0) {
-        setFilteredRecords([data.data[0]]);
-        setRecords([data.data[0]]);
-      } else {
-        setFilteredRecords([]);
-        setRecords([]);
-      }
-    } catch (error: any) {
-      notifications.show({
-        title: 'Error',
-        message: error.message || 'Failed to search records',
-        color: 'red',
-      });
-    } finally {
-      setIsInitialLoading(false);
-    }
-  };
-
   const preStyles: React.CSSProperties = {
     fontFamily: 'inherit',
     fontWeight: 300,
@@ -484,7 +419,7 @@ const DatasetView: React.FC = () => {
     width: '100%',
     margin: 0,
     padding: theme.spacing.sm,
-    backgroundColor: 'lavenderblush',
+    backgroundColor: 'lavender',
     borderRadius: theme.radius.md,
     border: '1px solid black',
   };
@@ -494,6 +429,50 @@ const DatasetView: React.FC = () => {
       const content = Array.isArray(children) ? children.join('') : children;
       return <Highlight highlight={searchTerms}>{content}</Highlight>;
     },
+  };
+
+  const handleSearch = async (term: string) => {
+    try {
+      // Build where clause based on available columns
+      const col = defaultSearchColumn || 'text';
+      const where = term ? [{ column: col, op: 'contains', value: term }] : [];
+      setQueryWhere(where);
+      setCurrentPage(1);
+      setCurrentBackendPage(1);
+      await fetchInitialRecords(where, orderByState);
+    } catch (e) {
+      // errors surfaced via notifications inside fetch
+    }
+  };
+
+  const handleMarkReviewed = async () => {
+    try {
+      if (!datasetInfo?.name) {
+        notifications.show({ title: 'Error', message: 'Dataset not loaded', color: 'red' });
+        return;
+      }
+      if (!filteredRecords || filteredRecords.length === 0) {
+        notifications.show({ title: 'Error', message: 'No record selected', color: 'red' });
+        return;
+      }
+      const rec = filteredRecords[0];
+      const rowId = (rec as any)['__row_id'];
+      if (!rowId) {
+        notifications.show({
+          title: 'Unavailable',
+          message: 'This row has no __row_id; cannot label.',
+          color: 'yellow',
+        });
+        return;
+      }
+      setIsLabelSaving(true);
+      await upsertLabelByRowId(datasetInfo.name, 'reviewed', rowId, 'yes');
+      notifications.show({ title: 'Saved', message: 'Marked as reviewed', color: 'green' });
+    } catch (e: any) {
+      notifications.show({ title: 'Error', message: e?.message || 'Label save failed', color: 'red' });
+    } finally {
+      setIsLabelSaving(false);
+    }
   };
 
   // Helper function to safely render any value as a string
@@ -666,22 +645,37 @@ const DatasetView: React.FC = () => {
               inheritPadding
               py="xs"
               style={{
-                backgroundColor: 'lavenderblush',
+                backgroundColor: 'lavender',
                 opacity: isPageLoading ? 0.7 : 1,
                 transition: 'opacity 0.2s ease',
               }}
             >
-              <Group justify="space-between" align="center">
+              <Group justify="space-between" align="center" wrap="nowrap">
+                {/* Left: title */}
                 <Text fw={300} size="sm">
                   Dataset Record {isPageLoading && '(Loading...)'}
                 </Text>
-                <Group gap="xs">
+
+                {/* Right: controls */}
+                <Group gap="xs" wrap="nowrap">
                   <CustomPagination
                     currentPage={currentPage}
-                    totalPages={totalRecords} // Display total records as total pages
+                    totalPages={totalRecords}
                     onPageChange={setCurrentPage}
                     disabled={isPageLoading || isEditing}
                   />
+
+                  <Tooltip label="Mark reviewed" withinPortal>
+                    <ActionIcon
+                      color="teal"
+                      variant="light"
+                      onClick={handleMarkReviewed}
+                      loading={isLabelSaving}
+                      disabled={isEditing || isPageLoading}
+                    >
+                      <IconCircleCheck size="1rem" />
+                    </ActionIcon>
+                  </Tooltip>
 
                   {isEditing && (
                     <Group gap="xs">
@@ -935,6 +929,9 @@ const DatasetView: React.FC = () => {
           </Card>
         </Grid.Col>
         <Grid.Col span={{ base: 12, md: 4 }}>
+          <Box mb="sm">
+            <SearchComponent onSearch={handleSearch} width="100%" />
+          </Box>
           <Card shadow="sm" radius="md" withBorder>
             <Card.Section withBorder inheritPadding py="xs">
               <Text fw={500}>Dataset Details</Text>

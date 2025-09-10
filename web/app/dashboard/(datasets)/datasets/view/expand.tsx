@@ -117,7 +117,7 @@ const InteractiveRecordModal: React.FC<InteractiveRecordModalProps> = ({ content
     width: '100%',
     margin: 0,
     padding: rem(8),
-    backgroundColor: 'lavenderblush',
+    backgroundColor: 'lavender',
     borderRadius: rem(4),
     border: '1px solid black',
     overflowX: 'hidden',

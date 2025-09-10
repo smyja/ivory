@@ -22,8 +22,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { IconEye, IconTrash, IconRefresh, IconPlus } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import { useDownloads } from '@/components/DownloadNotifications/DownloadContext';
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL;
+import { API_BASE_URL, API_ENDPOINTS } from '@/app/config/api';
 
 interface Dataset {
   id: number;
@@ -74,7 +73,7 @@ export default function DatasetsPage() {
 
   const fetchDatasets = async () => {
     try {
-      const response = await fetch(`${API_URL}/datasets`);
+      const response = await fetch(`${API_BASE_URL}${API_ENDPOINTS.datasets.base}`);
       if (!response.ok) {
         throw new Error('Failed to fetch datasets');
       }
@@ -113,12 +112,9 @@ export default function DatasetsPage() {
   const handleCluster = async (datasetId: number) => {
     setActionLoading(datasetId);
     try {
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}/cluster`,
-        {
-          method: 'POST',
-        }
-      );
+      const response = await fetch(`${API_BASE_URL}/datasets/${datasetId}/cluster`, {
+        method: 'POST',
+      });
       if (!response.ok) {
         throw new Error('Failed to start clustering');
       }
@@ -144,7 +140,7 @@ export default function DatasetsPage() {
     const pollInterval = setInterval(async () => {
       try {
         const response = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}/status?status_type=clustering`
+          `${API_BASE_URL}/datasets/${datasetId}/status?status_type=clustering`
         );
         if (!response.ok) {
           throw new Error('Failed to fetch clustering status');

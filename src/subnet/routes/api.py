@@ -10,7 +10,7 @@ from models import (
     TextDBResponse,
 )
 from utils.clustering import cluster_texts
-from utils.database import get_db, get_duckdb_connection
+from utils.database import get_db
 from sqlalchemy.orm import Session, joinedload
 import logging
 import os
