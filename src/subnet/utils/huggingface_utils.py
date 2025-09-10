@@ -292,9 +292,33 @@ def save_dataset_to_parquet(
 
     os.makedirs(base_path, exist_ok=True)
 
-    # Save to Parquet
+    # Save to Parquet (add stable row id if missing)
     parquet_path = os.path.join(base_path, "data.parquet")
     try:
+        try:
+            import hashlib
+            import json as _json
+            import pandas as _pd  # for type hints in lambda
+
+            if "__row_id" not in df.columns:
+                cols = sorted([c for c in df.columns if c != "__row_id"])
+
+                def _row_hash(series: _pd.Series) -> str:
+                    parts = []
+                    for col in cols:
+                        val = series.get(col, None)
+                        try:
+                            parts.append(_json.dumps(val, sort_keys=True, ensure_ascii=False, default=str))
+                        except Exception:
+                            parts.append(str(val))
+                    base = "\u241F".join(parts)
+                    return hashlib.sha1(base.encode("utf-8")).hexdigest()
+
+                df["__row_id"] = df.apply(_row_hash, axis=1)
+        except Exception:
+            # Best-effort: continue without row ids
+            pass
+
         df.to_parquet(parquet_path, index=False)
         logger.info(f"Saved dataset ({len(df)} rows) to: {parquet_path}")
     except Exception as e:

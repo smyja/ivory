@@ -23,6 +23,7 @@ import time
 from datetime import datetime
 from .progress_manager import report_progress, unregister_dataset
 import asyncio
+import hashlib
 import json
 
 
@@ -290,25 +291,15 @@ def scan_existing_datasets(db: Session):
                 processed_datasets += 1
                 continue
 
-            logger.info(
-                f"  Attempting bulk insert of {len(text_records)} unique texts for dataset ID {new_dataset.id}... (Column Used: '{chosen_column}')"
-            )
-            db.bulk_insert_mappings(TextDB, text_records)
-            db.flush()  # Ensure inserts are processed before updating count
-            total_texts_loaded = len(
-                text_records
-            )  # Count based on unique texts inserted
-            logger.info(
-                f"  Successfully inserted {total_texts_loaded} unique texts for {dataset_name_on_disk}."
-            )
-
+            # Do not insert texts into relational tables; rely on Parquet for reads
+            total_texts_loaded = len(text_records)
             # Update total_rows in metadata
             new_dataset.total_rows = total_texts_loaded
             new_dataset.error_message = None  # Clear any previous error
             db.commit()
             processed_datasets += 1
             logger.info(
-                f"Successfully processed dataset {dataset_name_on_disk} including text loading."
+                f"Successfully processed dataset {dataset_name_on_disk} with {total_texts_loaded} unique texts (Parquet-backed)."
             )
 
         except Exception as e_texts:
@@ -507,7 +498,31 @@ async def download_and_save_dataset(
         else:
             raise ValueError("hf_load_dataset returned None, failed to load data.")
 
-        # --- Apply limit_rows AFTER loading and concatenating ---
+        # --- Compute stable row IDs before saving ---
+        try:
+            # Prefer user-specified text fields; else use all columns in sorted order
+            if request.text_fields and all(col in df.columns for col in request.text_fields):
+                fields_for_id = list(request.text_fields)
+            else:
+                fields_for_id = sorted([c for c in df.columns if c != "__row_id"])  # avoid reusing existing
+
+            def _row_hash(series: pd.Series) -> str:
+                # Build a deterministic JSON string from selected columns
+                parts = []
+                for col in fields_for_id:
+                    val = series.get(col, None)
+                    try:
+                        parts.append(json.dumps(val, sort_keys=True, ensure_ascii=False, default=str))
+                    except Exception:
+                        parts.append(str(val))
+                base = "\u241F".join(parts)
+                return hashlib.sha1(base.encode("utf-8")).hexdigest()
+
+            df["__row_id"] = df.apply(_row_hash, axis=1)
+        except Exception as e_row:
+            logger.warning(f"Failed to compute __row_id, proceeding without it: {e_row}")
+
+        # --- Apply limit_rows AFTER computing row ids ---
         if request.limit_rows is not None and request.limit_rows > 0:
             actual_limit = min(request.limit_rows, len(df))
             if actual_limit < len(df):
@@ -610,7 +625,7 @@ async def download_and_save_dataset(
             df[request.text_fields].astype(str).agg(separator.join, axis=1)
         )
 
-        # --- De-duplicate and Load Concatenated Texts into TextDB ---
+        # --- De-duplicate and count concatenated texts (no DB insert) ---
         await report_progress(
             dataset_id,
             status=DownloadStatusEnum.IN_PROGRESS.value,
@@ -661,51 +676,21 @@ async def download_and_save_dataset(
             await unregister_dataset(dataset_id)
             return
 
-        try:
-            logger.info(
-                f"Bulk inserting {len(text_records)} concatenated texts for dataset ID {dataset_id}..."
-            )
-            db.bulk_insert_mappings(TextDB, text_records)
-            db.flush()
-            logger.info(
-                f"Successfully inserted concatenated texts for dataset ID {dataset_id}."
-            )
-
-            # Update metadata with final counts and status
-            dataset_metadata.total_rows = len(text_records)
-            dataset_metadata.status = DownloadStatusEnum.COMPLETED.value
-            dataset_metadata.verification_status = "valid"
-            dataset_metadata.error_message = None
-            db.commit()
-            logger.info(
-                f"Dataset download and concatenated text loading fully complete for dataset ID {dataset_id}."
-            )
-            await report_progress(
-                dataset_id,
-                status=DownloadStatusEnum.COMPLETED.value,
-                message="Dataset ready.",
-                data={"final_status": dataset_metadata.status},
-            )
-
-        except Exception as e_insert:
-            logger.error(
-                f"Failed to bulk insert concatenated texts for dataset ID {dataset_id}: {e_insert}",
-                exc_info=True,
-            )
-            db.rollback()
-            dataset_metadata.status = DownloadStatusEnum.FAILED.value
-            dataset_metadata.error_message = (
-                f"Failed concatenated text insertion: {e_insert}"
-            )
-            db.commit()
-            await report_progress(
-                dataset_id,
-                status=DownloadStatusEnum.FAILED.value,
-                message=f"Failed text insertion: {e_insert}",
-                data={"final_status": dataset_metadata.status},
-            )
-            await unregister_dataset(dataset_id)
-            raise
+        # Update metadata with final counts and status (no text insert)
+        dataset_metadata.total_rows = len(text_records)
+        dataset_metadata.status = DownloadStatusEnum.COMPLETED.value
+        dataset_metadata.verification_status = "valid"
+        dataset_metadata.error_message = None
+        db.commit()
+        logger.info(
+            f"Dataset download complete with {len(text_records)} unique concatenated texts stored in Parquet for dataset ID {dataset_id}."
+        )
+        await report_progress(
+            dataset_id,
+            status=DownloadStatusEnum.COMPLETED.value,
+            message="Dataset ready.",
+            data={"final_status": dataset_metadata.status},
+        )
 
     except Exception as e:
         error_msg = f"Download/Processing failed: {str(e)}"

@@ -13,9 +13,20 @@ from utils.clustering import cluster_texts
 from utils.database import get_db, get_duckdb_connection
 from sqlalchemy.orm import Session, joinedload
 import logging
+import os
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _orm_reads_disabled() -> bool:
+    val = os.environ.get("IVORY_DISABLE_ORM_READS", "0").lower()
+    return val in {"1", "true", "yes", "on"}
+
+
+def _ensure_orm_reads_enabled():
+    if _orm_reads_disabled():
+        raise HTTPException(status_code=410, detail="ORM-backed read endpoints are disabled. Use /query APIs.")
 
 
 @router.post(
@@ -56,6 +67,7 @@ async def cluster_texts_endpoint(
 async def list_categories(db: Session = Depends(get_db)):
     """List all categories."""
     try:
+        _ensure_orm_reads_enabled()
         categories = db.query(Category).all()
         return [CategoryResponse.model_validate(cat) for cat in categories]
     except Exception as e:
@@ -70,6 +82,7 @@ async def list_categories(db: Session = Depends(get_db)):
 async def list_level1_clusters(category_id: int, db: Session = Depends(get_db)):
     """List all Level 1 clusters for a specific category."""
     try:
+        _ensure_orm_reads_enabled()
         level1_clusters = (
             db.query(Level1Cluster)
             .filter(Level1Cluster.category_id == category_id)
@@ -99,6 +112,7 @@ async def list_level1_cluster_texts(
 ):
     """List all texts assigned to a specific Level 1 cluster."""
     try:
+        _ensure_orm_reads_enabled()
         logger.info(f"Fetching texts for Level 1 cluster {level1_cluster_id}")
 
         level1_cluster = (

@@ -103,3 +103,48 @@ The project is designed to support PostgreSQL integration in the future, particu
 3. Commit your changes (`git commit -m 'Add some amazing feature'`)
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
+
+## Analytical Query API
+
+This is the canonical way to query datasets. The backend reads Parquet files directly via DuckDB using a safe JSON query spec — no SQL from the frontend, no row-copying into relational tables.
+
+- Enable persistent DuckDB cache (optional): set `IVORY_USE_TABLE_INDEX=1`
+- Preview dataset schema: `GET /query/preview/{dataset}`
+- Run a query: `POST /query/run`
+
+Example payload:
+
+```
+{
+  "dataset": "my_dataset",
+  "select": ["text", "_hf_split"],
+  "where": [{"column": "text", "op": "contains", "value": "example"}],
+  "order_by": {"column": "_hf_split", "direction": "asc"},
+  "limit": 50
+}
+```
+
+Labels are managed per dataset/label name and are stored in SQLite files under `datasets/<dataset>/labels/`.
+
+- Upsert by text: `POST /query/label/upsert`
+- Upsert by row id (preferred): `POST /query/label/upsert_row`
+
+Notes:
+- New ingests include a stable `__row_id` column in Parquet for consistent joins and label/embedding alignment.
+- Legacy ORM-backed endpoints will be deprecated; use the JSON query API for reads.
+
+### Backfill `__row_id` for existing datasets
+
+If you have existing Parquet files without `__row_id`, run:
+
+```
+python -m src.subnet.tools.backfill_row_ids --root datasets
+```
+
+### Disable legacy ORM read endpoints (optional)
+
+Set this env var on the backend to return 410 for ORM-backed read endpoints:
+
+```
+IVORY_DISABLE_ORM_READS=1
+```
