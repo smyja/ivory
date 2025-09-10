@@ -67,7 +67,7 @@
 }
 
 .accountAvatar span {
-  color: #b3b3b3;
+  color: white;
   font-size: 0.875rem;
   text-transform: uppercase;
 }
@@ -184,7 +184,7 @@
 
 .subLinks .link {
   padding: var(--mantine-spacing-xs) var(--mantine-spacing-sm);
-  border-radius: var(--mantine-radius-sm);
+
   color: white;
   font-size: 0.9rem;
   padding-left: 1.5rem;
