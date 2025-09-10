@@ -16,6 +16,7 @@ export async function runQuery(params: {
   order_by?: OrderBy;
   limit?: number;
   offset?: number;
+  return_total?: boolean;
 }) {
   const res = await fetch(`${API_BASE_URL}${API_ENDPOINTS.query.run}`, {
     method: 'POST',
@@ -42,4 +43,3 @@ export async function upsertLabelByRowId(dataset: string, label: string, row_id:
   if (!res.ok) throw new Error(`Label upsert failed: ${res.status}`);
   return res.json();
 }
-

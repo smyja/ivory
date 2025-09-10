@@ -284,9 +284,30 @@ const DatasetView: React.FC = () => {
       setCachedRecords(rows);
       // Update default search column if needed
       if (rows.length > 0) {
-        const keys = Object.keys(rows[0] as any);
-        if (keys.includes('text')) setDefaultSearchColumn('text');
-        else if (keys.length > 0) setDefaultSearchColumn(keys[0]);
+        const sample = rows[0] as any;
+        const keys = Object.keys(sample);
+        const priority = [
+          'text',
+          'content',
+          'document',
+          'sentence',
+          'prompt',
+          'response',
+          'data',
+          'title',
+          'body',
+          'review',
+          'message',
+        ];
+        const preferred = priority.find((k) => keys.includes(k));
+        if (preferred) {
+          setDefaultSearchColumn(preferred);
+        } else {
+          // Try first string-like field
+          const stringKey = keys.find((k) => typeof sample[k] === 'string');
+          if (stringKey) setDefaultSearchColumn(stringKey);
+          else if (keys.length > 0) setDefaultSearchColumn(keys[0]);
+        }
       }
       setTotalRecords(typeof res.total === 'number' ? res.total : rows.length);
       setSplitsInfo(null);
@@ -433,9 +454,11 @@ const DatasetView: React.FC = () => {
 
   const handleSearch = async (term: string) => {
     try {
-      // Build where clause based on available columns
-      const col = defaultSearchColumn || 'text';
-      const where = term ? [{ column: col, op: 'contains', value: term }] : [];
+      // Use backend-wide search across all text columns via special column "*"
+      const col = '*';
+      const terms = term.split(/\s+/).filter((t) => t.trim().length > 0);
+      setSearchTerms(terms);
+      const where = terms.length > 0 ? terms.map((t) => ({ column: col, op: 'contains', value: t })) : [];
       setQueryWhere(where);
       setCurrentPage(1);
       setCurrentBackendPage(1);
@@ -588,6 +611,32 @@ const DatasetView: React.FC = () => {
   return (
     <Container my="md" fluid>
       <LoadingOverlay visible={isInitialLoading} overlayProps={{ blur: 2 }} />
+      <Group justify="flex-end" mb="sm" wrap="nowrap">
+        <SortButton
+          columns={cachedRecords && cachedRecords.length > 0 ? Object.keys(cachedRecords[0] as any) : ['text']}
+          onSort={(column, direction) => {
+            const ob = { column, direction } as { column: string; direction: 'asc' | 'desc' };
+            setOrderByState(ob);
+            setCurrentPage(1);
+            setCurrentBackendPage(1);
+            fetchInitialRecords(queryWhere, ob);
+          }}
+          initialDirection={orderByState?.direction || 'asc'}
+          initialColumn={orderByState?.column || null}
+        />
+        <Tooltip label="Mark reviewed" withinPortal>
+          <ActionIcon
+            color="teal"
+            variant="light"
+            onClick={handleMarkReviewed}
+            loading={isLabelSaving}
+            disabled={isEditing || isPageLoading}
+          >
+            <IconCircleCheck size="1rem" />
+          </ActionIcon>
+        </Tooltip>
+      </Group>
+
       <Card shadow="sm" radius="md" withBorder mb="md">
         <Group justify="space-between" mb="md">
           <div>
@@ -608,6 +657,7 @@ const DatasetView: React.FC = () => {
                 styles={{
                   root: {
                     transition: 'background-color 0.2s ease',
+                    backgroundColor: 'lightseagreen',
                     '&:hover': {
                       backgroundColor: '#333',
                     },
@@ -664,18 +714,6 @@ const DatasetView: React.FC = () => {
                     onPageChange={setCurrentPage}
                     disabled={isPageLoading || isEditing}
                   />
-
-                  <Tooltip label="Mark reviewed" withinPortal>
-                    <ActionIcon
-                      color="teal"
-                      variant="light"
-                      onClick={handleMarkReviewed}
-                      loading={isLabelSaving}
-                      disabled={isEditing || isPageLoading}
-                    >
-                      <IconCircleCheck size="1rem" />
-                    </ActionIcon>
-                  </Tooltip>
 
                   {isEditing && (
                     <Group gap="xs">

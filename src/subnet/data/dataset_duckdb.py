@@ -85,7 +85,11 @@ def create_dataset_view(conn: duckdb.DuckDBPyConnection, dataset_name: str) -> s
 ALLOWED_OPS = {"eq", "neq", "lt", "lte", "gt", "gte", "contains", "in"}
 
 
-def _compile_where(where: List[Dict[str, Any]], params: List[Any]) -> str:
+def _compile_where(
+    where: List[Dict[str, Any]],
+    params: List[Any],
+    any_text_columns: Optional[List[str]] = None,
+) -> str:
     clauses: List[str] = []
     for cond in where:
         col = cond.get("column")
@@ -93,6 +97,19 @@ def _compile_where(where: List[Dict[str, Any]], params: List[Any]) -> str:
         val = cond.get("value")
         if not col or op not in ALLOWED_OPS:
             continue
+        # Special case: search across any text-like column when column is "*"
+        if op == "contains" and str(col) == "*" and any_text_columns:
+            # Build an OR group across all candidate text columns
+            or_parts: List[str] = []
+            for c in any_text_columns:
+                ident_c = _quoted_ident(c)
+                or_parts.append(f"STRPOS(LOWER(CAST({ident_c} AS TEXT)), LOWER(?)) > 0")
+            if or_parts:
+                clauses.append("(" + " OR ".join(or_parts) + ")")
+                # Need one parameter per placeholder in the OR group
+                params.extend([str(val)] * len(or_parts))
+            continue
+
         ident = _quoted_ident(col)
         if op == "eq":
             clauses.append(f"{ident} = ?")
@@ -161,6 +178,8 @@ def execute_query(
     except Exception:
         pass
 
+    alias_main = "v"  # safe SQL alias for the dataset view
+
     for idx, path in enumerate(label_paths):
         alias = f"lbl_{idx}"
         try:
@@ -173,12 +192,12 @@ def execute_query(
         if has_row_id:
             try:
                 test_sql = (
-                    f"SELECT 1 FROM {_quoted_ident(view)} AS {view} "
-                    f"LEFT JOIN {alias}.labels AS {alias} ON {alias}.row_id = {view}.__row_id LIMIT 1"
+                    f"SELECT 1 FROM {_quoted_ident(view)} AS {alias_main} "
+                    f"LEFT JOIN {alias}.labels AS {alias} ON {alias}.row_id = {alias_main}.__row_id LIMIT 1"
                 )
                 conn.execute(test_sql)
                 join_sql_parts.append(
-                    f"LEFT JOIN {alias}.labels AS {alias} ON {alias}.row_id = {view}.__row_id"
+                    f"LEFT JOIN {alias}.labels AS {alias} ON {alias}.row_id = {alias_main}.__row_id"
                 )
                 joined = True
             except Exception:
@@ -188,12 +207,12 @@ def execute_query(
             # Fallback to joining by text if both sides have text
             try:
                 test_sql = (
-                    f"SELECT 1 FROM {_quoted_ident(view)} AS {view} "
-                    f"LEFT JOIN {alias}.labels AS {alias} ON {alias}.text = {view}.text LIMIT 1"
+                    f"SELECT 1 FROM {_quoted_ident(view)} AS {alias_main} "
+                    f"LEFT JOIN {alias}.labels AS {alias} ON {alias}.text = {alias_main}.text LIMIT 1"
                 )
                 conn.execute(test_sql)
                 join_sql_parts.append(
-                    f"LEFT JOIN {alias}.labels AS {alias} ON {alias}.text = {view}.text"
+                    f"LEFT JOIN {alias}.labels AS {alias} ON {alias}.text = {alias_main}.text"
                 )
             except Exception:
                 # skip if cannot join
@@ -202,9 +221,30 @@ def execute_query(
     params: List[Any] = []
     sel = select or ["*"]
     safe_sel = ", ".join(_quoted_ident(c) if c != "*" else "*" for c in sel)
-    base = f"SELECT {safe_sel} FROM {_quoted_ident(view)} AS {view} "
+    base = f"SELECT {safe_sel} FROM {_quoted_ident(view)} AS {alias_main} "
     joins = ("\n" + "\n".join(join_sql_parts) + "\n") if join_sql_parts else ""
-    where_sql = _compile_where(where or [], params)
+    # Inspect view columns and collect text-like columns for broad search
+    any_text_columns: List[str] = []
+    try:
+        info_cur = conn.execute(f"PRAGMA table_info('{view}')")
+        cols_info = info_cur.fetchall()
+        # DuckDB PRAGMA table_info returns: [cid, name, type, notnull, dflt_value, pk]
+        for row in cols_info:
+            try:
+                name = row[1]
+                typ = (row[2] or "").upper()
+                # Include typical textual types; otherwise allow casting anyway
+                if "CHAR" in typ or "TEXT" in typ or "STRING" in typ or typ == "VARCHAR":
+                    any_text_columns.append(name)
+            except Exception:
+                continue
+        # Fallback: if none detected, include all columns so CAST will handle non-text
+        if not any_text_columns and cols_info:
+            any_text_columns = [row[1] for row in cols_info if len(row) > 1]
+    except Exception:
+        any_text_columns = []
+
+    where_sql = _compile_where(where or [], params, any_text_columns=any_text_columns)
 
     order_sql = ""
     if order_by and isinstance(order_by, dict):
@@ -230,8 +270,8 @@ def execute_query(
     if return_total:
         # Compute total count with the same WHERE (no limit/offset)
         count_params: List[Any] = []
-        count_where = _compile_where(where or [], count_params)
-        count_sql = f"SELECT COUNT(*) AS total FROM {_quoted_ident(view)} AS {view} " + count_where
+        count_where = _compile_where(where or [], count_params, any_text_columns=any_text_columns)
+        count_sql = f"SELECT COUNT(*) AS total FROM {_quoted_ident(view)} AS {alias_main} " + count_where
         try:
             count_row = conn.execute(count_sql, count_params).fetchone()
             result["total"] = int(count_row[0]) if count_row else 0
