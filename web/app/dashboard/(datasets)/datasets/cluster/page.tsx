@@ -16,6 +16,7 @@ import {
   Select,
 } from '@mantine/core';
 import { useSearchParams, useRouter } from 'next/navigation';
+import { API_BASE_URL, API_ENDPOINTS } from '@/app/config/api';
 import { IconArrowUpRight, IconArrowDownRight } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import classes from './ClusterView.module.css';
@@ -107,7 +108,7 @@ export default function ClusterView() {
 
       // Send texts to titling endpoint
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}/clusters/${clusterId}/title`,
+        `${API_BASE_URL}/datasets/${datasetId}/clusters/${clusterId}/title`,
         {
           method: 'POST',
           headers: {
@@ -158,7 +159,7 @@ export default function ClusterView() {
     const key = `cluster-${clusterId}`;
     try {
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}/clusters/${clusterId}/title/status`
+        `${API_BASE_URL}/datasets/${datasetId}/clusters/${clusterId}/title/status`
       );
 
       if (!response.ok) {
@@ -202,12 +203,11 @@ export default function ClusterView() {
     setLoading(true);
     setError(null);
     try {
-      const url = new URL(`${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}/details`);
-      if (selectedVersion) {
-        url.searchParams.append('version', selectedVersion.toString());
-      }
-
-      const response = await fetch(url.toString());
+      const detailsPath = API_ENDPOINTS.datasets.clustering.details(
+        parseInt(datasetId as string, 10),
+        selectedVersion || undefined
+      );
+      const response = await fetch(`${API_BASE_URL}${detailsPath}`);
       if (!response.ok) {
         const errorData = await response
           .json()
@@ -216,10 +216,7 @@ export default function ClusterView() {
       }
       const data: DatasetDetailResponse = await response.json();
 
-      console.log('API Response for clusters/details:', {
-        url: url.toString(),
-        data,
-      });
+      console.log('API Response for clusters/details:', { path: detailsPath, data });
 
       if (data.clustering_status === 'processing') {
         notifications.show({
@@ -269,9 +266,12 @@ export default function ClusterView() {
   const fetchVersions = async () => {
     if (!datasetId) return;
     try {
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/datasets/${datasetId}/clustering/versions`
+      // Show loading state while determining available versions
+      setLoading(true);
+      const versionsPath = API_ENDPOINTS.datasets.clustering.versions(
+        parseInt(datasetId as string, 10)
       );
+      const response = await fetch(`${API_BASE_URL}${versionsPath}`);
       if (!response.ok) {
         throw new Error('Failed to fetch clustering versions');
       }
@@ -284,11 +284,13 @@ export default function ClusterView() {
         router.replace(`/dashboard/datasets/cluster?id=${datasetId}&version=${latestVersion}`);
       } else if (data.length === 0) {
         setError('No completed clustering versions found for this dataset.');
+        setLoading(false);
       }
     } catch (error: any) {
       console.error('Error fetching versions:', error);
       setError(error.message || 'Failed to load clustering versions.');
       setVersions([]);
+      setLoading(false);
     }
   };
 
@@ -391,17 +393,6 @@ export default function ClusterView() {
     );
   };
 
-  if (loading && !datasetDetails) {
-    return (
-      <Container
-        size="xl"
-        style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh' }}
-      >
-        <Loader size="xl" />
-      </Container>
-    );
-  }
-
   if (error) {
     return (
       <Container size="xl" py="xl">
@@ -434,6 +425,17 @@ export default function ClusterView() {
             />
           </Group>
         )}
+      </Container>
+    );
+  }
+
+  if (loading && !datasetDetails) {
+    return (
+      <Container
+        size="xl"
+        style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh' }}
+      >
+        <Loader size="xl" />
       </Container>
     );
   }

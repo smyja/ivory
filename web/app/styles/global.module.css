@@ -6,3 +6,8 @@
   font-family: 'satoshi', sans-serif;
   font-weight: 700;
 }
+
+/* Force square buttons globally */
+.mantine-Button-root {
+  border-radius: 0 !important;
+}

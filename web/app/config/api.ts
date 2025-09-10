@@ -19,8 +19,9 @@ export const API_ENDPOINTS = {
     clustering: {
       start: '/datasets/clustering/start',
       status: (datasetId: number) => `/datasets/clustering/${datasetId}/status`,
-      results: (datasetId: number, version?: number) =>
-        `/datasets/clustering/${datasetId}/results${version ? `?version=${version}` : ''}`,
+      versions: (datasetId: number) => `/datasets/clustering/${datasetId}/versions`,
+      details: (datasetId: number, version?: number) =>
+        `/datasets/clustering/${datasetId}/details${version ? `?version=${version}` : ''}`,
       history: (datasetId: number) => `/datasets/clustering/${datasetId}/history`,
     },
     details: (datasetId: number) => `/datasets/${datasetId}`,

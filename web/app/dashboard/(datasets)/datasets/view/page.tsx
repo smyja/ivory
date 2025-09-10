@@ -534,7 +534,13 @@ const DatasetView: React.FC = () => {
 
   const getOriginalFields = (record: Record) =>
     Object.entries(record)
-      .filter(([key]) => !key.startsWith('structured_key_') && !key.startsWith('structured_value_'))
+      .filter(([key]) =>
+        !key.startsWith('structured_key_') &&
+        !key.startsWith('structured_value_') &&
+        key !== '__row_id' &&
+        key !== 'filename' &&
+        key !== '__filename'
+      )
       .map(([key, value]) => [key, safeString(value)]);
 
   // Add save function
@@ -977,6 +983,15 @@ const DatasetView: React.FC = () => {
             <Card.Section inheritPadding mt="md" pb="md">
               {datasetInfo ? (
                 <Stack gap="xs">
+                  {/* Show current record row id if available */}
+                  {filteredRecords && filteredRecords.length > 0 && (filteredRecords[0] as any)['__row_id'] && (
+                    <Group justify="space-between">
+                      <Text size="sm" fw={500}>
+                        Row ID:
+                      </Text>
+                      <Text size="xs">{(filteredRecords[0] as any)['__row_id']}</Text>
+                    </Group>
+                  )}
                   <Group justify="space-between">
                     <Text size="sm" fw={500}>
                       Identifier:
