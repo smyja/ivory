@@ -26,7 +26,7 @@ docker-compose up -d
 
 3. Access the applications:
 - Frontend: http://localhost:3000
-- Backend: http://localhost:8000
+- Backend: http://localhost:8000/api/v1
 
 The application uses DuckDB for data storage, which is automatically initialized when the container starts.
 
@@ -104,13 +104,14 @@ The project is designed to support PostgreSQL integration in the future, particu
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 
-## Analytical Query API
+## Analytical Query API (v1)
 
 This is the canonical way to query datasets. The backend reads Parquet files directly via DuckDB using a safe JSON query spec — no SQL from the frontend, no row-copying into relational tables.
 
 - Enable persistent DuckDB cache (optional): set `IVORY_USE_TABLE_INDEX=1`
-- Preview dataset schema: `GET /query/preview/{dataset}`
-- Run a query: `POST /query/run`
+- API version endpoint: `GET /api/v1/meta/version`
+- Preview dataset schema: `GET /api/v1/query/preview/{dataset}`
+- Run a query: `POST /api/v1/query/run`
 
 Example payload:
 
@@ -126,8 +127,8 @@ Example payload:
 
 Labels are managed per dataset/label name and are stored in SQLite files under `datasets/<dataset>/labels/`.
 
-- Upsert by text: `POST /query/label/upsert`
-- Upsert by row id (preferred): `POST /query/label/upsert_row`
+- Upsert by text: `POST /api/v1/query/label/upsert`
+- Upsert by row id (preferred): `POST /api/v1/query/label/upsert_row`
 
 Notes:
 - New ingests include a stable `__row_id` column in Parquet for consistent joins and label/embedding alignment.

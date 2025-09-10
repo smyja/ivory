@@ -55,7 +55,7 @@ def _label_sqlite_paths(dataset_name: str) -> List[str]:
 
 def _quoted_ident(name: str) -> str:
     # Basic identifier quoting for view/table names
-    return f'"{name.replace("\"", "\"\"")}"'
+    return '"' + name.replace('"', '""') + '"'
 
 
 def create_dataset_view(conn: duckdb.DuckDBPyConnection, dataset_name: str) -> str:
@@ -67,7 +67,8 @@ def create_dataset_view(conn: duckdb.DuckDBPyConnection, dataset_name: str) -> s
     enforced here; see notes below.
     """
     parquet_glob = _dataset_parquet_glob(dataset_name)
-    view_name = f"t_{dataset_name.replace('/', '_').replace('\\', '_')}"
+    safe_view = dataset_name.replace("/", "_").replace("\\", "_")
+    view_name = "t_" + safe_view
 
     # Use filename=true to expose source path which we can use as part of a composite key
     sql = f"""
@@ -133,6 +134,7 @@ def execute_query(
     order_by: Optional[Dict[str, Any]] = None,
     limit: Optional[int] = 100,
     offset: Optional[int] = 0,
+    return_total: bool = False,
 ) -> Dict[str, Any]:
     """
     Execute a safe, simple analytical query over the dataset view.
@@ -152,7 +154,7 @@ def execute_query(
     # Inspect view columns to see if __row_id is present
     has_row_id = False
     try:
-        info_cur = conn.execute(f"PRAGMA table_info({_quoted_ident(view)})")
+        info_cur = conn.execute(f"PRAGMA table_info('{view}')")
         cols_info = info_cur.fetchall()
         view_cols = {row[1] for row in cols_info} if cols_info and len(cols_info[0]) > 1 else set()
         has_row_id = "__row_id" in view_cols
@@ -162,7 +164,7 @@ def execute_query(
     for idx, path in enumerate(label_paths):
         alias = f"lbl_{idx}"
         try:
-            conn.execute(f"ATTACH '{path}' AS {alias} (TYPE sqlite)")
+            conn.execute(f"ATTACH DATABASE '{path}' AS {alias} (TYPE SQLITE)")
         except Exception:
             continue
 
@@ -223,7 +225,20 @@ def execute_query(
     rows = cur.fetchall()
     cols = [d[0] for d in cur.description]
     data = [dict(zip(cols, r)) for r in rows]
-    return {"columns": cols, "rows": data}
+    result: Dict[str, Any] = {"columns": cols, "rows": data}
+
+    if return_total:
+        # Compute total count with the same WHERE (no limit/offset)
+        count_params: List[Any] = []
+        count_where = _compile_where(where or [], count_params)
+        count_sql = f"SELECT COUNT(*) AS total FROM {_quoted_ident(view)} AS {view} " + count_where
+        try:
+            count_row = conn.execute(count_sql, count_params).fetchone()
+            result["total"] = int(count_row[0]) if count_row else 0
+        except Exception:
+            result["total"] = None
+
+    return result
 
 
 def preview_schema(dataset_name: str, limit: int = 5) -> Dict[str, Any]:

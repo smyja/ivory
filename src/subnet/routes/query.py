@@ -28,6 +28,7 @@ class QuerySpec(BaseModel):
     order_by: Optional[OrderBy] = None
     limit: Optional[int] = 100
     offset: Optional[int] = 0
+    return_total: Optional[bool] = True
 
 
 @router.post("/run")
@@ -40,6 +41,7 @@ def run_query(spec: QuerySpec) -> Dict[str, Any]:
             order_by=spec.order_by.model_dump() if spec.order_by else None,
             limit=spec.limit,
             offset=spec.offset,
+            return_total=bool(spec.return_total),
         )
         return result
     except Exception as e:

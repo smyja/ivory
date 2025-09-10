@@ -6,6 +6,7 @@ from fastapi.openapi.utils import get_openapi
 import logging
 from dotenv import load_dotenv
 from routes import api_router
+import os
 
 # Load environment variables
 load_dotenv()
@@ -46,8 +47,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include routers
-app.include_router(api_router)
+# Include routers (versioned path is canonical and enforced)
+app.include_router(api_router, prefix="/api/v1")
+
+# Optional compatibility alias if explicitly enabled
+if os.environ.get("IVORY_ENABLE_UNVERSIONED_API", "0").lower() in {"1", "true", "yes", "on"}:
+    app.include_router(api_router)
 
 
 def custom_openapi():
