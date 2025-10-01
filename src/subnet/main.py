@@ -15,12 +15,12 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Check for OPENROUTER_API_KEY
-if not os.environ.get("OPENROUTER_API_KEY"):
-    logger.error("OPENROUTER_API_KEY is not set in the environment variables")
+# Require Together API key (we only support Together now)
+if not os.environ.get("TOGETHER_API_KEY"):
+    logger.error("TOGETHER_API_KEY is not set in the environment variables")
     raise HTTPException(
         status_code=500,
-        detail="OPENROUTER_API_KEY is not set. Please set this environment variable before running the application.",
+        detail="TOGETHER_API_KEY is not set. Please set this environment variable before running the application.",
     )
 
 

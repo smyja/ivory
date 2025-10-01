@@ -1,11 +1,11 @@
 import os
 import json
 from typing import List
-from openai import OpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
 import logging
 import asyncio
 from pydantic import BaseModel, Field
+from utils.ai import get_llm_client, get_llm_model
 
 logger = logging.getLogger(__name__)
 
@@ -15,23 +15,6 @@ MAX_RETRIES = 3
 MAX_TOKENS_TITLE = 50
 MAX_TOKENS_CATEGORY = 50
 
-
-class LLMClient:
-    _instance = None
-
-    @classmethod
-    def get_instance(cls):
-        if cls._instance is None:
-            api_key = os.environ.get("OPENROUTER_API_KEY")
-            if not api_key:
-                raise EnvironmentError(
-                    "OPENROUTER_API_KEY environment variable is not set."
-                )
-            cls._instance = OpenAI(
-                base_url="https://openrouter.ai/api/v1",
-                api_key=api_key,
-            )
-        return cls._instance
 
 
 class TitleOutput(BaseModel):
@@ -161,10 +144,11 @@ async def get_llm_response(prompt: str) -> str:
         The LLM's response as a string
     """
     try:
-        client = LLMClient.get_instance()
+        client = get_llm_client()
+        model = get_llm_model()
         response = await asyncio.to_thread(
             client.chat.completions.create,
-            model="anthropic/claude-3.7-sonnet",
+            model=model,
             messages=[
                 {
                     "role": "system",
@@ -174,10 +158,6 @@ async def get_llm_response(prompt: str) -> str:
             ],
             max_tokens=MAX_TOKENS_TITLE,
             temperature=0.2,
-            extra_headers={
-                "HTTP-Referer": "https://github.com/ivory",
-                "X-Title": "Ivory",
-            },
         )
         # Add robust checks for the response structure
         if (

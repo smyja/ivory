@@ -2,22 +2,28 @@ import numpy as np
 import logging
 import os
 from typing import List
-from openai import OpenAI
 import asyncio
+from tenacity import retry, stop_after_attempt, wait_exponential
+from utils.ai import get_embed_client, get_embed_model
+
+# Retry configuration
+MAX_RETRIES = 3
+
+
+@retry(stop=stop_after_attempt(MAX_RETRIES), wait=wait_exponential(multiplier=1, max=60))
+async def _embed_batch(create_call, model: str, batch: List[str]):
+    response = await asyncio.to_thread(create_call, model=model, input=batch)
+    return [item.embedding for item in response.data]
 
 logger = logging.getLogger(__name__)
 
 
 async def vectorize_texts(texts: List[str]) -> np.ndarray:
-    """Convert a list of texts to their vector representations using OpenAI's embedding API."""
+    """Vectorize texts using Together embeddings if configured, otherwise OpenAI."""
     try:
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if not api_key:
-            raise EnvironmentError("OPENAI_API_KEY environment variable is not set.")
-
-        client = OpenAI(
-            api_key=api_key,
-        )
+        client = get_embed_client()
+        embed_model = get_embed_model()
+        create_call = client.embeddings.create
 
         # Process texts in batches to avoid overwhelming the API
         batch_size = 100
@@ -25,16 +31,7 @@ async def vectorize_texts(texts: List[str]) -> np.ndarray:
 
         for i in range(0, len(texts), batch_size):
             batch = texts[i : i + batch_size]
-
-            # Use asyncio.to_thread to make the synchronous API call asynchronous
-            response = await asyncio.to_thread(
-                client.embeddings.create,
-                model="text-embedding-3-small",  # OpenAI's latest embedding model
-                input=batch,
-            )
-
-            # Extract embeddings from the response
-            batch_embeddings = [item.embedding for item in response.data]
+            batch_embeddings = await _embed_batch(create_call, embed_model, batch)
             all_embeddings.extend(batch_embeddings)
 
         # Convert to numpy array and ensure it's float32 for consistency
@@ -43,5 +40,3 @@ async def vectorize_texts(texts: List[str]) -> np.ndarray:
     except Exception as e:
         logger.error(f"Error vectorizing texts: {str(e)}")
         raise
-
-    return embeddings

@@ -20,10 +20,9 @@ from models import (
 )
 from utils.database import (
     get_db,
-    save_clustering_results,
+    SessionLocal,
 )
 from utils.clustering import cluster_texts
-from .utils import get_embeddings, generate_category_name, BATCH_SIZE
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -140,7 +139,7 @@ async def trigger_clustering_endpoint(
 
         # Start clustering in the background
         background_tasks.add_task(
-            run_clustering_task, dataset_id, next_version, texts_with_ids, db
+            run_clustering_task, dataset_id, next_version, texts_with_ids
         )
 
         return {
@@ -186,15 +185,16 @@ async def get_dataset_details_endpoint(
         categories = (
             db.query(Category)
             .filter(Category.dataset_id == dataset_id)
-            .filter(Category.clustering_version == version)
+            .filter(Category.version == version)
             .all()
         )
 
-        # Get clusters
+        # Get clusters (join via Category to filter by dataset)
         clusters = (
             db.query(Level1Cluster)
-            .filter(Level1Cluster.dataset_id == dataset_id)
-            .filter(Level1Cluster.clustering_version == version)
+            .join(Category, Level1Cluster.category_id == Category.id)
+            .filter(Category.dataset_id == dataset_id)
+            .filter(Level1Cluster.version == version)
             .all()
         )
 
@@ -234,56 +234,20 @@ async def get_dataset_details_endpoint(
 
 
 async def run_clustering_task(
-    dataset_id: int, version: int, texts_with_ids: List[Tuple[int, str]], db: Session
+    dataset_id: int, version: int, texts_with_ids: List[Tuple[int, str]]
 ):
     """Run the clustering task in the background."""
     try:
-        # Extract texts for embedding
-        text_ids = [t[0] for t in texts_with_ids]
+        # Extract texts
         texts = [t[1] for t in texts_with_ids]
 
-        # Process in batches to avoid memory issues
-        all_embeddings = []
-        for i in range(0, len(texts), BATCH_SIZE):
-            batch_texts = texts[i : i + BATCH_SIZE]
-            batch_embeddings = await get_embeddings(batch_texts)
-            all_embeddings.extend(batch_embeddings)
-
-        # Run clustering algorithm
-        categories, clusters, assignments = await cluster_texts(
-            text_ids, texts, all_embeddings
-        )
-
-        # Generate category names
-        for category in categories:
-            # Get a sample of texts from this category
-            category_text_ids = set(
-                assignment["text_id"]
-                for assignment in assignments
-                if assignment["category_id"] == category["id"]
-            )
-
-            # Find the actual texts
-            category_texts = [
-                text for text_id, text in texts_with_ids if text_id in category_text_ids
-            ][
-                :5
-            ]  # Limit to 5 samples
-
-            # Generate a name
-            if category_texts:
-                category_name = await generate_category_name(category_texts)
-                category["name"] = category_name
-
-        # Save results to database
-        await save_clustering_results(
-            db, dataset_id, version, categories, clusters, assignments
-        )
-
-        # Update dataset status
-        session = db()
+        # Use a fresh DB session for background work
+        session: Session = SessionLocal()
         try:
-            # Update clustering history
+            # Run consolidated clustering (writes results to DB internally)
+            categories, _ = await cluster_texts(texts, db=session, dataset_id=dataset_id, version=version)
+
+            # Update clustering history and dataset flags
             history = (
                 session.query(ClusteringHistory)
                 .filter(ClusteringHistory.dataset_id == dataset_id)
@@ -294,19 +258,20 @@ async def run_clustering_task(
                 history.clustering_status = "completed"
                 history.completed_at = datetime.now()
                 history.num_categories = len(categories)
-                history.num_clusters = len(clusters)
+                # Sum Level1 clusters across categories
+                num_clusters = sum(len(c.level1_clusters) for c in categories)
+                history.num_clusters = num_clusters
 
-                # Update dataset metadata
-                dataset = (
-                    session.query(DatasetMetadata)
-                    .filter(DatasetMetadata.id == dataset_id)
-                    .first()
-                )
-                if dataset:
-                    dataset.clustering_status = "completed"
-                    dataset.is_clustered = True
+            dataset = (
+                session.query(DatasetMetadata)
+                .filter(DatasetMetadata.id == dataset_id)
+                .first()
+            )
+            if dataset:
+                dataset.clustering_status = "completed"
+                dataset.is_clustered = True
 
-                session.commit()
+            session.commit()
         except Exception as e:
             session.rollback()
             raise e
@@ -317,7 +282,7 @@ async def run_clustering_task(
     except Exception as e:
         logger.error(f"Error in clustering task: {str(e)}")
         # Update error status
-        session = db()
+        session: Session = SessionLocal()
         try:
             history = (
                 session.query(ClusteringHistory)
