@@ -18,17 +18,17 @@ services:
 
   backend:
     build:
-      context: ./src/subnet
+      context: ./src
       dockerfile: Dockerfile
     ports:
       - "8000:8000"
     environment:
       - DATABASE_URL=duckdb:///app/datasets.db
     volumes:
-      - ./src/subnet:/app
+      - ./src:/app
       - /app/venv
       - /app/__pycache__
-      - ./src/subnet/datasets.db:/app/datasets.db
+      - ./src/datasets.db:/app/datasets.db
 
 volumes:
   datasets_data:

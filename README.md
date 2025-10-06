@@ -51,9 +51,9 @@ yarn dev
 
 #### Backend
 
-1. Navigate to the subnet directory:
+1. Navigate to the backend directory:
 ```bash
-cd src/subnet
+cd src
 ```
 
 2. Create and activate a virtual environment:
@@ -80,14 +80,14 @@ python main.py
 ## Project Structure
 
 - `web/` - Next.js frontend application
-- `src/subnet/` - Python backend application
+- `src/` - Python backend application
   - Uses DuckDB for data storage
   - Prepared for future PostgreSQL integration for authentication
 - `docker-compose.yml` - Docker Compose configuration
 
 ## Database
 
-The project currently uses DuckDB for data storage, with the database file located at `src/subnet/datasets.db`. The database is persisted using Docker volumes.
+The project currently uses DuckDB for data storage, with the database file located at `src/datasets.db`. The database is persisted using Docker volumes.
 
 ### Future Database Integration
 
@@ -139,7 +139,7 @@ Notes:
 If you have existing Parquet files without `__row_id`, run:
 
 ```
-python -m src.subnet.tools.backfill_row_ids --root datasets
+python tools/backfill_row_ids.py --root datasets
 ```
 
 ### Disable legacy ORM read endpoints (optional)

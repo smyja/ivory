@@ -8,10 +8,8 @@ from dotenv import load_dotenv
 from routes import api_router
 import os
 
-# Load environment variables
 load_dotenv()
 
-# Set up logging - Change to INFO level for more informative logs
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -27,9 +25,6 @@ if not os.environ.get("TOGETHER_API_KEY"):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("FastAPI app is starting up")
-    # logger.info("Registered routes during startup:") # Commented out
-    # for route in app.routes: # Commented out
-    #     logger.info(f"Path: {route.path}, Methods: {route.methods}") # Commented out
     yield
     logger.info("FastAPI app is shutting down")
 

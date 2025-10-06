@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 
 def check_dataset_state():
     # Point to the correct database file path
-    db_path = "src/subnet/datasets.db"
+    db_path = "src/datasets.db"
     conn = duckdb.connect(db_path)
 
     try:
